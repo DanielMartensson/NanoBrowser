@@ -130,6 +130,15 @@ int main(int argc, char *argv[])
 
     g_previousMessageHandler = qInstallMessageHandler(nanoBrowserMessageHandler);
 
+    if (qgetenv("QT_LOGGING_RULES").isEmpty())
+        qputenv("QT_LOGGING_RULES", "*.warning=false");
+
+    if (!qEnvironmentVariableIsSet("FONTCONFIG_FILE")
+        && QFile::exists(QStringLiteral("/etc/fonts/fonts.conf"))) {
+        qputenv("FONTCONFIG_FILE", "/etc/fonts/fonts.conf");
+        qputenv("FONTCONFIG_PATH", "/etc/fonts");
+    }
+
     const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
     const QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist --disable-features=WebGPU";
     if (!baseFlags.contains(extraFlags))
