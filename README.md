@@ -4,6 +4,10 @@ A lightweight Qt6/QML web browser for embedded Linux, targeted at the STM32MP257
 (OpenSTLinux / scarthgap BSP). Uses the native graphics API where available
 (Vulkan first, OpenGL as fallback).
 
+## Demo
+
+![NanoBrowser demo](docs/nanobrowser.gif)
+
 ## Features
 
 - Minimal dark-themed QML UI: back/forward buttons, address bar, load progress and
