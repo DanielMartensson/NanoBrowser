@@ -9,5 +9,13 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
+# Chromium/WebEngine child processes can lose HOME in their sandbox, which
+# breaks fontconfig's default config lookup ("Cannot load default config file").
+# Point them at the system config explicitly when available.
+if [ -f /etc/fonts/fonts.conf ]; then
+    export FONTCONFIG_FILE="${FONTCONFIG_FILE:-/etc/fonts/fonts.conf}"
+    export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/etc/fonts}"
+fi
+
 # NANOBROWSER_RENDERER is passed through unchanged (e.g. "vulkan" or "opengl").
 exec "$BIN" "$@"

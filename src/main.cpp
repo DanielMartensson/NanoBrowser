@@ -12,7 +12,18 @@
 #include <QDebug>
 #include <QStandardPaths>
 #include <QVarLengthArray>
+#include <QtGlobal>
 #include <vulkan/vulkan.h>
+
+static QtMessageHandler g_previousMessageHandler = nullptr;
+
+static void nanoBrowserMessageHandler(QtMsgType type, const QMessageLogContext &context,
+                                      const QString &message)
+{
+    if (message.startsWith(QLatin1String("js:")))
+        return;
+    g_previousMessageHandler(type, context, message);
+}
 
 static QByteArray rendererFromEnv()
 {
@@ -116,6 +127,8 @@ int main(int argc, char *argv[])
 {
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QCoreApplication::setApplicationName(QStringLiteral("NanoBrowser"));
+
+    g_previousMessageHandler = qInstallMessageHandler(nanoBrowserMessageHandler);
 
     const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
     const QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist --disable-features=WebGPU";
