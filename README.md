@@ -105,3 +105,22 @@ On Linux they are stored under:
 
 (see the `Cookies` SQLite database). Set `offTheRecord: true` if you ever want an
 incognito/profile-less mode instead.
+
+## Clearing browsing data
+
+Close the browser first, then remove the profile directory. The whole browsing
+profile lives in one folder, so deleting it clears everything:
+
+```sh
+rm -rf ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser
+```
+
+That removes history, cookies, cached files, session and local storage (site
+data). The folder is recreated automatically on the next launch.
+
+To clear only individual parts, delete just the relevant files in that folder:
+
+- Cookies only: `rm -f Cookies Cookies-journal`
+- History only: `rm -f History History-journal "Visited Links"`
+- Cache only: `rm -rf Cache GPUCache`
+- Site data / local storage only: `rm -rf "Local Storage" Session Storage WebStorage databases`
