@@ -7,10 +7,45 @@
 #include <QtWebEngineQuick>
 #include <QUrl>
 #include <QDebug>
+#include <QVarLengthArray>
+#include <vulkan/vulkan.h>
 
 static QByteArray rendererFromEnv()
 {
     return qgetenv("NANOBROWSER_RENDERER").toLower();
+}
+
+static bool vulkanHardwareAvailable(QVulkanInstance &instance)
+{
+    PFN_vkEnumeratePhysicalDevices enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        instance.getInstanceProcAddr("vkEnumeratePhysicalDevices"));
+    PFN_vkGetPhysicalDeviceProperties getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+        instance.getInstanceProcAddr("vkGetPhysicalDeviceProperties"));
+    if (!enumerate || !getProperties)
+        return false;
+
+    uint32_t count = 0;
+    if (enumerate(instance.vkInstance(), &count, nullptr) != VK_SUCCESS || count == 0)
+        return false;
+
+    QVarLengthArray<VkPhysicalDevice, 8> devices(count);
+    if (enumerate(instance.vkInstance(), &count, devices.data()) != VK_SUCCESS)
+        return false;
+
+    bool sawHardware = false;
+    for (VkPhysicalDevice device : devices) {
+        VkPhysicalDeviceProperties props{};
+        getProperties(device, &props);
+        if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
+            continue;
+        const QByteArray name = QByteArray(props.deviceName);
+        if (name.contains("llvmpipe"))
+            continue;
+        if (name.contains("NVK") || name.contains("nouveau"))
+            return false;
+        sawHardware = true;
+    }
+    return sawHardware;
 }
 
 static void pickGraphicsApi()
@@ -23,8 +58,10 @@ static void pickGraphicsApi()
     }
 
     QVulkanInstance probe;
-    if (forced != "vulkan" && !probe.create()) {
-        qInfo() << "NanoBrowser: using OpenGL renderer (Vulkan not available)";
+    const bool created = probe.create();
+    const bool suitable = created && vulkanHardwareAvailable(probe);
+    if (forced != "vulkan" && !suitable) {
+        qInfo() << "NanoBrowser: using OpenGL renderer (Vulkan not available or unsuitable)";
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
         return;
     }
@@ -46,10 +83,11 @@ int main(int argc, char *argv[])
             : baseFlags + " " + extraFlags);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
-    pickGraphicsApi();
     QtWebEngineQuick::initialize();
 
     QGuiApplication app(argc, argv);
+
+    pickGraphicsApi();
 #else
     QGuiApplication app(argc, argv);
 

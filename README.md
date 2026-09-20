@@ -41,6 +41,16 @@ python3 -m venv ~/.venvs/aqt && ~/.venvs/aqt/bin/pip install aqtinstall
 
 Use the latest available patch release of your chosen Qt 6.8.x.
 
+## Quick start
+
+Two helper scripts (Linux):
+
+- `./setup.sh` — one-time bootstrap: installs `aqtinstall`, downloads Qt 6.8.x
+  to `~/Qt` if missing, and configures + builds into `build/`. Override the
+  version or install dir with `QT_VERSION` / `QT_INSTALL_DIR`.
+- `./run.sh` — launches the built browser (`build/nanobrowser`), passing through
+  `NANOBROWSER_RENDERER` if set.
+
 ## Building
 
 Configure with the path to your Qt 6.8+ installation, then build:
@@ -61,20 +71,23 @@ build cache, so later rebuilds only need `cmake --build build`.
 
 Graphics backend selection:
 
-- By default a Vulkan instance is probed first; if it cannot be created, OpenGL
-  (RHI) is used.
-- Force one or the other with the `NANOBROWSER_RENDERER` environment variable:
-  `opengl` or `vulkan`.
+- A Vulkan instance is probed first. It is only accepted if a usable hardware
+  driver is present — known-unstable or software implementations are skipped:
+  NVK/nouveau, llvmpipe, and CPU-only devices. Otherwise OpenGL (RHI) is used.
+- Force either backend explicitly with the `NANOBROWSER_RENDERER` environment
+  variable: `opengl` or `vulkan` (Vulkan with a forced value skips the check).
 
-> Note for the development machine (Lenovo W540, Intel HD 4600 / Nouveau): its Vulkan
-> (NVK) driver is incomplete and crashes the WebEngine GPU process, so run it with
-> `NANOBROWSER_RENDERER=opengl`.
+> Note for the development machine (Lenovo W540, Intel HD 4600 / NVIDIA Quadro
+> K1100M with the open-source Nouveau driver): its Vulkan stack is incomplete
+> (NVK crashes the WebEngine GPU process), so the app automatically falls back
+> to OpenGL here.
 
 ## How it works
 
-- `src/main.cpp` selects the scenegraph backend (`pickGraphicsApi()`), initializes
-  Qt WebEngine with the correct ordering for Qt 6.8, and loads the QML module with
-  `engine.loadFromModule("NanoBrowser", "Main")`.
+- `src/main.cpp` selects the scenegraph backend (`pickGraphicsApi()`), which
+  probes Vulkan (rejecting NVK/nouveau, llvmpipe and CPU-only devices), then
+  initializes Qt WebEngine with the correct ordering for Qt 6.8, and loads the
+  QML module with `engine.loadFromModule("NanoBrowser", "Main")`.
 - `qml/Main.qml` lays out the top bar (navigation buttons, address bar, progress),
   a `WebEngineView` with `webGLEnabled`, and a fullscreen auto-hide header.
 - Chromium starts with `--enable-unsafe-swiftshader --ignore-gpu-blocklist`
