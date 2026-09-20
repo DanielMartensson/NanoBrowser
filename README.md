@@ -19,34 +19,39 @@ A lightweight Qt6/QML web browser for embedded Linux, targeted at the STM32MP257
 
 Build dependencies:
 
-- Qt 6.8 (LTS) with at least: `QtBase`, `Qt Quick`, `Qt Quick Controls`,
-  `Qt WebEngine` (`QtWebEngineQuick`). A standard desktop Qt installation pulls in
-  the transitive `Qt6WebChannel` and `Qt6Positioning` that WebEngine requires.
+- Qt 6.8 or newer (the minimum is enforced in CMake via
+  `find_package(Qt6 6.8 ...)`), with at least: `QtBase`, `Qt Quick`, `Qt Quick
+  Controls`, `Qt WebEngine` (`QtWebEngineQuick`). A standard desktop Qt
+  installation pulls in the transitive `Qt6WebChannel` and `Qt6Positioning` that
+  WebEngine requires.
 - CMake 3.16+
 - A C++17-capable compiler (GCC or Clang).
 
-Qt on the target board is provided by the Yocto/OpenSTLinux BSP (ST ships Qt 6.8.4
-in the scarthgap layers, layer `meta-qt6`). For development on x86_64 Linux,
-install Qt 6.8 from [download.qt.io](https://download.qt.io) — e.g. with
+Qt on the target board is provided by the Yocto/OpenSTLinux BSP (ST ships the
+Qt 6.8 LTS line in the scarthgap layers, layer `meta-qt6`). For development on
+x86_64 Linux, install any Qt 6.8.x (or newer) from
+[download.qt.io](https://download.qt.io) — e.g. with
 [aqtinstall](https://aqtinstall.readthedocs.io):
 
 ```sh
 python3 -m venv ~/.venvs/aqt && ~/.venvs/aqt/bin/pip install aqtinstall
-~/.venvs/aqt/bin/aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O ~/Qt \
+~/.venvs/aqt/bin/aqt install-qt linux desktop 6.8 linux_gcc_64 -O ~/Qt \
     -m qtwebengine qtwebchannel qtpositioning
 ```
 
+Use the latest available patch release of your chosen Qt 6.8.x.
+
 ## Building
 
-Configure with the path to your Qt 6.8 installation, then build:
+Configure with the path to your Qt 6.8+ installation, then build:
 
 ```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64 -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8/gcc_64 -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
-The CMAKE_PREFIX_PATH is stored in the build cache, so later rebuilds only need
-`cmake --build build`.
+Adjust `CMAKE_PREFIX_PATH` to your actual Qt installation. It is stored in the
+build cache, so later rebuilds only need `cmake --build build`.
 
 ## Running
 
