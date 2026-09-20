@@ -77,6 +77,11 @@ Graphics backend selection:
 - Force either backend explicitly with the `NANOBROWSER_RENDERER` environment
   variable: `opengl` or `vulkan` (Vulkan with a forced value skips the check).
 
+`./run.sh` keeps the console quiet: it sets `QT_LOGGING_RULES` to suppress
+spammy JavaScript console messages from web pages by default (critical messages
+still show). Override with your own rules if you need the full log, e.g.
+`QT_LOGGING_RULES= ./run.sh`.
+
 > Note for the development machine (Lenovo W540, Intel HD 4600 / NVIDIA Quadro
 > K1100M with the open-source Nouveau driver): its Vulkan stack is incomplete
 > (NVK crashes the WebEngine GPU process), so the app automatically falls back

@@ -17,5 +17,9 @@ if [ -f /etc/fonts/fonts.conf ]; then
     export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/etc/fonts}"
 fi
 
+# Web pages often spam the console with Permissions-Policy notices in Qt
+# WebEngine. Silence them by default while keeping critical messages.
+export QT_LOGGING_RULES="${QT_LOGGING_RULES:-*.warning=false}"
+
 # NANOBROWSER_RENDERER is passed through unchanged (e.g. "vulkan" or "opengl").
 exec "$BIN" "$@"
