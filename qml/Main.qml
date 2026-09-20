@@ -176,8 +176,16 @@ ApplicationWindow {
         }
     }
 
+    WebEngineProfile {
+        id: browserProfile
+        storageName: "nanobrowser"
+        offTheRecord: false
+        persistentCookiesPolicy: WebEngineProfile.ForcePersistentCookies
+    }
+
     WebEngineView {
         id: webView
+        profile: browserProfile
         anchors {
             top: topBar.bottom
             left: parent.left
@@ -187,6 +195,7 @@ ApplicationWindow {
         settings.webGLEnabled: true
         url: "https://duckduckgo.com/"
         onUrlChanged: addressBar.text = url.toString()
+        onJavaScriptConsoleMessage: {}
     }
 
     MouseArea {

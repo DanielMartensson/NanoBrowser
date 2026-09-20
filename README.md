@@ -77,11 +77,10 @@ Graphics backend selection:
 - Force either backend explicitly with the `NANOBROWSER_RENDERER` environment
   variable: `opengl` or `vulkan` (Vulkan with a forced value skips the check).
 
-The console stays quiet by default: the app sets `QT_LOGGING_RULES="*.warning=false"`
-before Qt WebEngine starts, which suppresses spammy JavaScript console messages
-from web pages (Google/YouTube traffic emits several per page load). Critical
-messages still show. Override with your own rules for the full log, e.g.
-`QT_LOGGING_RULES='*' ./run.sh`.
+The console stays quiet by default: page JavaScript console messages (Google/YouTube
+traffic emits several per page load) are swallowed in `qml/Main.qml` through the
+`WebEngineView.javaScriptConsoleMessage` handler. To see the full page console
+output again, remove that handler or run with `QT_LOGGING_RULES='*' ./run.sh`.
 
 > Note for the development machine (Lenovo W540, Intel HD 4600 / NVIDIA Quadro
 > K1100M with the open-source Nouveau driver): its Vulkan stack is incomplete
@@ -112,21 +111,47 @@ On Linux they are stored under:
 (see the `Cookies` SQLite database). Set `offTheRecord: true` if you ever want an
 incognito/profile-less mode instead.
 
-## Clearing browsing data
+## Clearing cookies and history
 
-Close the browser first, then remove the profile directory. The whole browsing
-profile lives in one folder, so deleting it clears everything:
+Chrome/WebEngine keeps the SQLite files in the profile folder locked while the
+browser runs, so always close NanoBrowser first (quit the window or press
+`Ctrl+C` in the terminal), then delete what you need.
+
+### Delete everything (full reset)
+
+The whole browsing profile lives in one directory, so removing it clears
+cookies, history, cache, session and local storage at once:
 
 ```sh
 rm -rf ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser
 ```
 
-That removes history, cookies, cached files, session and local storage (site
-data). The folder is recreated automatically on the next launch.
+The directory is recreated automatically on the next launch.
 
-To clear only individual parts, delete just the relevant files in that folder:
+### Delete only the cookies
 
-- Cookies only: `rm -f Cookies Cookies-journal`
-- History only: `rm -f History History-journal "Visited Links"`
-- Cache only: `rm -rf Cache GPUCache`
-- Site data / local storage only: `rm -rf "Local Storage" Session Storage WebStorage databases`
+```sh
+rm -f ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/Cookies \
+      ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/Cookies-journal
+```
+
+### Delete only the history
+
+```sh
+rm -f ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/History \
+      ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/History-journal \
+      ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/"Visited Links"
+```
+
+### Clear other site data
+
+- HTTP cache: `rm -rf ~/.cache/NanoBrowser/QtWebEngine/nanobrowser` (plus
+  `GPUCache` in the profile folder)
+- Site data / local storage:
+  `rm -rf ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/"Local Storage" \
+         ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/"Session Storage" \
+         ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/WebStorage \
+         ~/.local/share/NanoBrowser/QtWebEngine/nanobrowser/databases`
+
+If the profile was ever run off-the-record, a leftover `databases-off-the-record`
+folder may remain in the profile directory; it is safe to delete.

@@ -159,10 +159,11 @@ int main(int argc, char *argv[])
     QtWebEngineQuick::initialize();
 #endif
 
-    QWebEngineProfile *profile = QWebEngineProfile::defaultProfile();
+    QWebEngineProfile *profile = new QWebEngineProfile(QStringLiteral("nanobrowser"), &app);
     profile->setPersistentStoragePath(
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
         + QStringLiteral("/QtWebEngine/nanobrowser"));
+    profile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
 
     QQmlApplicationEngine engine;
 
