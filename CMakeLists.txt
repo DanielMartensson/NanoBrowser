@@ -9,7 +9,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick WebEngineQuick)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick WebEngineQuick WebEngineCore)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -30,4 +30,4 @@ set_target_properties(NanoBrowser PROPERTIES
     OUTPUT_NAME nanobrowser
 )
 
-target_link_libraries(NanoBrowser PRIVATE Qt6::Quick Qt6::WebEngineQuick)
+target_link_libraries(NanoBrowser PRIVATE Qt6::Quick Qt6::WebEngineQuick Qt6::WebEngineCore)

@@ -176,16 +176,8 @@ ApplicationWindow {
         }
     }
 
-    WebEngineProfile {
-        id: browserProfile
-        storageName: "nanobrowser"
-        offTheRecord: false
-        persistentCookiesPolicy: WebEngineProfile.ForcePersistentCookies
-    }
-
     WebEngineView {
         id: webView
-        profile: browserProfile
         anchors {
             top: topBar.bottom
             left: parent.left

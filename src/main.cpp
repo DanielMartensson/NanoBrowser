@@ -1,18 +1,54 @@
 #include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QVulkanInstance>
+#include <QtWebEngineCore/QWebEngineProfile>
 #include <QtWebEngineQuick>
 #include <QUrl>
 #include <QDebug>
+#include <QStandardPaths>
 #include <QVarLengthArray>
 #include <vulkan/vulkan.h>
 
 static QByteArray rendererFromEnv()
 {
     return qgetenv("NANOBROWSER_RENDERER").toLower();
+}
+
+static bool unstableVulkanIcdPresent()
+{
+    const QDir::Filters filters = QDir::Files;
+    const QStringList filter({QStringLiteral("*.json")});
+    const char *const icdDirs[] = {
+        "/usr/local/share/vulkan/icd.d",
+        "/usr/share/vulkan/icd.d",
+        "/etc/vulkan/icd.d",
+    };
+    const char *const unstableNames[] = { "nouveau", "hasvk" };
+
+    const QString envIcds = QString::fromUtf8(qgetenv("VK_ICD_FILENAMES"));
+    for (const QString &icd : envIcds.split(QLatin1Char(':'), Qt::SkipEmptyParts)) {
+        const QString name = QFileInfo(icd).fileName();
+        for (const char *u : unstableNames)
+            if (name.contains(QLatin1String(u), Qt::CaseInsensitive))
+                return true;
+    }
+
+    for (const char *dir : icdDirs) {
+        const QDir d{QLatin1String(dir)};
+        if (!d.exists())
+            continue;
+        const QStringList icds = d.entryList(filter, filters);
+        for (const QString &name : icds)
+            for (const char *u : unstableNames)
+                if (name.contains(QLatin1String(u), Qt::CaseInsensitive))
+                    return true;
+    }
+    return false;
 }
 
 static bool vulkanHardwareAvailable(QVulkanInstance &instance)
@@ -57,6 +93,12 @@ static void pickGraphicsApi()
         return;
     }
 
+    if (forced != "vulkan" && unstableVulkanIcdPresent()) {
+        qInfo() << "NanoBrowser: using OpenGL renderer (unstable Vulkan drivers detected)";
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
+        return;
+    }
+
     QVulkanInstance probe;
     const bool created = probe.create();
     const bool suitable = created && vulkanHardwareAvailable(probe);
@@ -76,7 +118,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName(QStringLiteral("NanoBrowser"));
 
     const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
-    const QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist";
+    const QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist --disable-features=WebGPU";
     if (!baseFlags.contains(extraFlags))
         qputenv("QTWEBENGINE_CHROMIUM_FLAGS", baseFlags.isEmpty()
             ? extraFlags
@@ -94,6 +136,11 @@ int main(int argc, char *argv[])
     pickGraphicsApi();
     QtWebEngineQuick::initialize();
 #endif
+
+    QWebEngineProfile *profile = QWebEngineProfile::defaultProfile();
+    profile->setPersistentStoragePath(
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/QtWebEngine/nanobrowser"));
 
     QQmlApplicationEngine engine;
 
