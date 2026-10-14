@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QVulkanInstance>
@@ -15,6 +16,13 @@
 #include <QVarLengthArray>
 #include <QtGlobal>
 #include <vulkan/vulkan.h>
+
+// NOTE: The target's Qt 6.8 (OpenSTLinux) is a trimmed/renamed Qt build.
+// This code must therefore avoid the standard Qt 6 APIs that are missing
+// there: QString::leftOfLastPathSeparator()/leftPart(),
+// QIODevice::AppendOnly, QFile::openStatus()/QFile::Ok, and
+// QQmlEngine::addContextProperty(). Context properties are set through
+// QQmlEngine::rootContext()->setContextProperty() instead.
 
 static QtMessageHandler g_previousMessageHandler = nullptr;
 
@@ -43,20 +51,23 @@ static QString graphicsLogPath()
 static void appendGraphicsLog()
 {
     const QString path = graphicsLogPath();
-    const QString dir = path.leftOfLastPathSeparator();
+    // QDir::absolutePath() gives the directory part (leftOfLastPathSeparator
+    // is not available in the target Qt build).
+    const QString dir = QDir(path).absolutePath();
     if (!dir.isEmpty() && !QDir(dir).exists())
         QDir(dir).mkdir(dir);
 
-    QFile logFile(path);
-    logFile.open(QIODevice::WriteOnly | QIODevice::AppendOnly | QIODevice::Text);
-    if (logFile.openStatus() != QFile::Ok)
-        return;
+    const QString line = QString("%1 %2 %3\n").arg(
+                              QDateTime::currentDateTime().toString(Qt::ISODate),
+                              g_graphicsApi,
+                              g_graphicsReason).toUtf8();
 
-    logFile.write(QString("%1 %2 %3\n").arg(
-                      QDateTime::currentDateTime().toString(Qt::ISODate, 'T'),
-                      g_graphicsApi,
-                      g_graphicsReason).toUtf8());
-    logFile.close();
+    QFile logFile(path);
+    if (logFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        logFile.seek(logFile.size()); // QIODevice::AppendOnly is not available
+        logFile.write(line.toUtf8());
+        logFile.close();
+    }
 }
 
 static bool unstableVulkanIcdPresent()
@@ -138,15 +149,17 @@ static bool vulkanInstanceUsable(QVulkanInstance &instance)
     // Requiring a 1.2+ instance keeps this broken probe path out on
     // the target. Future-proof: a newer, fully conformant ICD passes
     // this check and enables real Vulkan without code changes.
+    // The target Vulkan headers declare vkEnumerateInstanceVersion
+    // with a single uint32_t* argument and define VK_API_VERSION_1_2.
     PFN_vkEnumerateInstanceVersion enumerate = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
         instance.getInstanceProcAddr("vkEnumerateInstanceVersion"));
     if (!enumerate)
         return false;
 
     uint32_t supportedVersion = 0;
-    if (enumerate(instance.vkInstance(), &supportedVersion) != VK_SUCCESS)
+    if (enumerate(&supportedVersion) != VK_SUCCESS)
         return false;
-    return supportedVersion >= VK_API_VERSION_1_2_0;
+    return supportedVersion >= VK_API_VERSION_1_2;
 }
 
 static void pickGraphicsApi()
@@ -225,16 +238,11 @@ int main(int argc, char *argv[])
             ? extraFlags
             : baseFlags + " " + extraFlags);
 
+    QGuiApplication app(argc, argv);
+
+    pickGraphicsApi();
+
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
-    QtWebEngineQuick::initialize();
-
-    QGuiApplication app(argc, argv);
-
-    pickGraphicsApi();
-#else
-    QGuiApplication app(argc, argv);
-
-    pickGraphicsApi();
     QtWebEngineQuick::initialize();
 #endif
 
@@ -245,8 +253,13 @@ int main(int argc, char *argv[])
     profile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
 
     QQmlApplicationEngine engine;
-    engine.addContextProperty("graphicsApi", g_graphicsApi);
-    engine.addContextProperty("graphicsReason", g_graphicsReason);
+    // Target Qt: no QQmlEngine::addContextProperty(); context properties go
+    // through the root context instead.
+    QQmlContext *context = engine.rootContext();
+    if (context) {
+        context->setContextProperty("graphicsApi", g_graphicsApi);
+        context->setContextProperty("graphicsReason", g_graphicsReason);
+    }
 
     engine.loadFromModule("NanoBrowser", "Main");
 
