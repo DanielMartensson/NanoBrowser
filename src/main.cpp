@@ -95,6 +95,32 @@ static bool vulkanHardwareAvailable(QVulkanInstance &instance)
     return sawHardware;
 }
 
+static bool vulkanInstanceUsable(QVulkanInstance &instance)
+{
+    // Chromium (QtWebEngineCore) requires a Vulkan 1.2 instance and
+    // presents to the compositor via external VkImage file
+    // descriptors. The legacy GCNANO/VeriSilicon ICD on the Weston
+    // target reports only loader interface v2 and does not expose
+    // vkEnumerateInstanceVersion; the loader then falls back to a
+    // 1.0-level instance and QtWebEngineCore aborts the process when
+    // it later tries to export those image file descriptors
+    // ("Unable to extract file descriptor out of external VkImage").
+
+    // Requiring a 1.2+ instance keeps this broken probe path out on
+    // the target. Future-proof: a newer, fully conformant ICD passes
+    // this check and enables real Vulkan without code changes.
+    PFN_vkEnumerateInstanceVersion enumerate = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+        instance.getInstanceProcAddr("vkEnumerateInstanceVersion"));
+    if (!enumerate)
+        return false;
+
+    uint32_t supportedVersion = 0;
+    if (enumerate(instance.vkInstance(), &supportedVersion) != VK_SUCCESS)
+        return false;
+
+    return supportedVersion >= VK_API_VERSION_1_2_0;
+}
+
 static void pickGraphicsApi()
 {
     const QByteArray forced = rendererFromEnv();
@@ -112,7 +138,9 @@ static void pickGraphicsApi()
 
     QVulkanInstance probe;
     const bool created = probe.create();
-    const bool suitable = created && vulkanHardwareAvailable(probe);
+    const bool suitable = created
+        && vulkanHardwareAvailable(probe)
+        && vulkanInstanceUsable(probe);
     if (forced != "vulkan" && !suitable) {
         qInfo() << "NanoBrowser: using OpenGL renderer (Vulkan not available or unsuitable)";
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
