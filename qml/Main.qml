@@ -176,6 +176,46 @@ ApplicationWindow {
         }
     }
 
+    Rectangle {
+        id: graphicsBanner
+        anchors {
+            top: topBar.bottom
+            left: parent.left
+            right: parent.right
+        }
+        height: 44
+        z: 50
+        clip: true
+        visible: true
+        opacity: 0
+        color: (graphicsApi === "Vulkan") ? "#1E3D2E" : "#8A4A00"
+
+        Behavior on opacity { NumberAnimation { duration: 250 } }
+
+        onCompleted: graphicsBanner.opacity = 1
+
+        Text {
+            anchors.fill: parent
+            anchors.verticalAlignment: Text.AlignVCenter
+            horizontalAlignment: Text.AlignCenter
+            color: "#FFFFFF"
+            font.pixelSize: 13
+            font.bold: true
+            text: (graphicsApi === "Vulkan")
+                  ? "Vulkan"
+                  : "OpenGL fallback \u2014 " + graphicsReason
+        }
+
+        Timer {
+            id: graphicsBannerTimer
+            interval: 4500
+            onTriggered: {
+                opacity = 0
+                graphicsBannerTimer.stop()
+            }
+        }
+    }
+
     WebEngineProfile {
         id: browserProfile
         storageName: "nanobrowser"

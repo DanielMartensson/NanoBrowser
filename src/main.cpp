@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -17,6 +18,9 @@
 
 static QtMessageHandler g_previousMessageHandler = nullptr;
 
+static QString g_graphicsApi = QStringLiteral("OpenGL");
+static QString g_graphicsReason = {};
+
 static void nanoBrowserMessageHandler(QtMsgType type, const QMessageLogContext &context,
                                       const QString &message)
 {
@@ -28,6 +32,31 @@ static void nanoBrowserMessageHandler(QtMsgType type, const QMessageLogContext &
 static QByteArray rendererFromEnv()
 {
     return qgetenv("NANOBROWSER_RENDERER").toLower();
+}
+
+static QString graphicsLogPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+           + QStringLiteral("/graphics.log");
+}
+
+static void appendGraphicsLog()
+{
+    const QString path = graphicsLogPath();
+    const QString dir = path.leftOfLastPathSeparator();
+    if (!dir.isEmpty() && !QDir(dir).exists())
+        QDir(dir).mkdir(dir);
+
+    QFile logFile(path);
+    logFile.open(QIODevice::WriteOnly | QIODevice::AppendOnly | QIODevice::Text);
+    if (logFile.openStatus() != QFile::Ok)
+        return;
+
+    logFile.write(QString("%1 %2 %3\n").arg(
+                      QDateTime::currentDateTime().toString(Qt::ISODate, 'T'),
+                      g_graphicsApi,
+                      g_graphicsReason).toUtf8());
+    logFile.close();
 }
 
 static bool unstableVulkanIcdPresent()
@@ -117,38 +146,60 @@ static bool vulkanInstanceUsable(QVulkanInstance &instance)
     uint32_t supportedVersion = 0;
     if (enumerate(instance.vkInstance(), &supportedVersion) != VK_SUCCESS)
         return false;
-
     return supportedVersion >= VK_API_VERSION_1_2_0;
 }
 
 static void pickGraphicsApi()
 {
     const QByteArray forced = rendererFromEnv();
+
     if (forced == "opengl") {
-        qInfo() << "NanoBrowser: using OpenGL renderer (forced)";
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
+        g_graphicsApi = QStringLiteral("OpenGL");
+        g_graphicsReason = QStringLiteral("forced via NANOBROWSER_RENDERER");
+        qInfo() << "NanoBrowser: using OpenGL renderer (forced)";
+        appendGraphicsLog();
         return;
     }
 
     if (forced != "vulkan" && unstableVulkanIcdPresent()) {
-        qInfo() << "NanoBrowser: using OpenGL renderer (unstable Vulkan drivers detected)";
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
+        g_graphicsApi = QStringLiteral("OpenGL");
+        g_graphicsReason = QStringLiteral("unstable Vulkan drivers detected (nouveau/hasvk)");
+        qInfo() << "NanoBrowser: using OpenGL renderer (unstable Vulkan drivers detected)";
+        appendGraphicsLog();
         return;
     }
 
     QVulkanInstance probe;
-    const bool created = probe.create();
-    const bool suitable = created
-        && vulkanHardwareAvailable(probe)
+    const bool instanceCreated = probe.create();
+    const bool hardwareSuitable = instanceCreated
+        && vulkanHardwareAvailable(probe);
+    const bool instanceUsable = hardwareSuitable
         && vulkanInstanceUsable(probe);
+    const bool suitable = instanceUsable;
+
+    const QString vulkanFallbackReason =
+        !instanceCreated
+            ? QStringLiteral("could not create a Vulkan instance")
+            : !hardwareSuitable
+                ? QStringLiteral("no supported Vulkan GPU")
+                : QStringLiteral("Vulkan instance below 1.2 (ICD does not expose vkEnumerateInstanceVersion)");
+
     if (forced != "vulkan" && !suitable) {
-        qInfo() << "NanoBrowser: using OpenGL renderer (Vulkan not available or unsuitable)";
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
+        g_graphicsApi = QStringLiteral("OpenGL");
+        g_graphicsReason = vulkanFallbackReason;
+        qInfo() << "NanoBrowser: using OpenGL renderer (" << vulkanFallbackReason << ")";
+        appendGraphicsLog();
         return;
     }
 
-    qInfo() << "NanoBrowser: using Vulkan renderer";
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
+    g_graphicsApi = QStringLiteral("Vulkan");
+    g_graphicsReason.clear();
+    qInfo() << "NanoBrowser: using Vulkan renderer";
+    appendGraphicsLog();
 }
 
 int main(int argc, char *argv[])
@@ -194,6 +245,8 @@ int main(int argc, char *argv[])
     profile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
 
     QQmlApplicationEngine engine;
+    engine.addContextProperty("graphicsApi", g_graphicsApi);
+    engine.addContextProperty("graphicsReason", g_graphicsReason);
 
     engine.loadFromModule("NanoBrowser", "Main");
 
