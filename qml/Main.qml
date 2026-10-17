@@ -28,6 +28,33 @@ ApplicationWindow {
     property bool edgeHover: false
     property int barHeight: 62
 
+    // Hardware (VPU) playback of YouTube pages, implemented in src/main.cpp.
+    property bool youtubeOffer: false
+    property string hwErrorText: ""
+    readonly property bool youtubePage: window.isPlayablePage(webView.url)
+    readonly property bool hwCardVisible: hardwarePlayer.status.length > 0
+                                           || hardwarePlayer.title.length > 0
+                                           || window.hwErrorText.length > 0
+
+    function isPlayablePage(u) {
+        var s = u.toString()
+        return s.indexOf("youtube.com/watch") >= 0
+            || s.indexOf("youtube.com/shorts/") >= 0
+            || s.indexOf("youtube.com/live/") >= 0
+            || s.indexOf("youtu.be/") >= 0
+    }
+
+    // Hands the page over to the VPU: the video is streamed straight from
+    // YouTube and decoded by v4l2slh264dec (H.264), audio goes to PipeWire.
+    // The page's own player is paused and muted so that there is only one
+    // audio source and the CPU does not decode the video a second time.
+    function playWithHardware() {
+        window.youtubeOffer = false
+        window.hwErrorText = ""
+        webView.runJavaScript("document.querySelectorAll('video').forEach(function (v) { v.pause(); v.muted = true })")
+        hardwarePlayer.play(webView.url)
+    }
+
     function loadUrl() {
         var text = addressBar.text.trim()
         if (text.length === 0)
@@ -49,6 +76,14 @@ ApplicationWindow {
     Shortcut {
         sequence: "F11"
         onActivated: window.toggleFullscreen()
+    }
+
+    Shortcut {
+        sequence: "F8"
+        onActivated: {
+            if (window.youtubePage)
+                window.playWithHardware()
+        }
     }
 
     Rectangle {
@@ -123,6 +158,13 @@ ApplicationWindow {
                 active: window.isFullscreen
                 tip: window.isFullscreen ? "Exit fullscreen (F11)" : "Enter fullscreen (F11)"
                 onClicked: window.toggleFullscreen()
+            }
+
+            NavButton {
+                text: "\u25B6"
+                tip: "Play this video with the hardware decoder (VPU, F8)"
+                enabled: window.youtubePage && hardwarePlayer.available
+                onClicked: window.playWithHardware()
             }
 
             Rectangle {
@@ -216,6 +258,137 @@ ApplicationWindow {
         }
     }
 
+    // Hardware (VPU) playback: shows what is being resolved/decoded and offers
+    // a stop button.
+    Rectangle {
+        id: hardwareCard
+        z: 60
+        anchors {
+            top: topBar.bottom
+            horizontalCenter: parent.horizontalCenter
+            topMargin: 10
+        }
+        width: Math.min(window.width - 24, 620)
+        height: cardRow.implicitHeight + 20
+        radius: 12
+        color: "#1B2030"
+        border.width: 1
+        border.color: window.hwErrorText.length > 0 ? "#E74C3C"
+                      : (hardwarePlayer.playing ? "#2ECC71" : "#7C5CFC")
+        opacity: window.hwCardVisible ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        RowLayout {
+            id: cardRow
+            anchors {
+                fill: parent
+                leftMargin: 14
+                rightMargin: 10
+                topMargin: 10
+                bottomMargin: 10
+            }
+            spacing: 10
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+
+                Text {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    font.pixelSize: 13
+                    font.bold: true
+                    color: window.hwErrorText.length > 0 ? "#FF9A8B" : "#E8EAF2"
+                    text: window.hwErrorText.length > 0
+                          ? window.hwErrorText
+                          : (hardwarePlayer.status.length > 0
+                             ? hardwarePlayer.status
+                             : "Hardware decoder: v4l2slh264dec (VPU)")
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: hardwarePlayer.title.length > 0
+                    elide: Text.ElideRight
+                    font.pixelSize: 11
+                    color: "#98A1B3"
+                    text: hardwarePlayer.title
+                }
+            }
+
+            NavButton {
+                text: "\u25A0"
+                tip: "Stop hardware playback"
+                onClicked: hardwarePlayer.stop()
+            }
+        }
+    }
+
+    // Offered whenever a YouTube video page is opened.
+    Rectangle {
+        id: youtubeBar
+        z: 55
+        anchors {
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
+        height: 58
+        color: "#241B4D"
+        border.color: "#7C5CFC"
+        border.width: 1
+        opacity: (window.youtubeOffer && hardwarePlayer.available && !window.hwCardVisible) ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        RowLayout {
+            anchors {
+                fill: parent
+                leftMargin: 14
+                rightMargin: 12
+                topMargin: 9
+                bottomMargin: 9
+            }
+            spacing: 10
+
+            Text {
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+                color: "#E8EAF2"
+                font.pixelSize: 13
+                text: "YouTube video \u2014 play it with the hardware decoder (VPU, H.264)"
+            }
+
+            NavButton {
+                text: "\u25B6"
+                tip: "Play with the VPU"
+                onClicked: window.playWithHardware()
+            }
+
+            NavButton {
+                text: "\u2715"
+                tip: "Not now"
+                onClicked: window.youtubeOffer = false
+            }
+        }
+    }
+
+    Timer {
+        id: hwErrorTimer
+        interval: 8000
+        onTriggered: window.hwErrorText = ""
+    }
+
+    Connections {
+        target: hardwarePlayer
+
+        function onFailed(reason) {
+            window.hwErrorText = reason
+            hwErrorTimer.restart()
+        }
+    }
+
     WebEngineProfile {
         id: browserProfile
         storageName: "nanobrowser"
@@ -234,7 +407,10 @@ ApplicationWindow {
         }
         settings.webGLEnabled: true
         url: "https://duckduckgo.com/"
-        onUrlChanged: addressBar.text = url.toString()
+        onUrlChanged: {
+            addressBar.text = url.toString()
+            window.youtubeOffer = window.isPlayablePage(url)
+        }
         onJavaScriptConsoleMessage: {}
     }
 
