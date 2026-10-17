@@ -196,8 +196,8 @@ ApplicationWindow {
 
         Text {
             anchors.fill: parent
-            anchors.verticalAlignment: Text.AlignVCenter
-            horizontalAlignment: Text.AlignCenter
+            verticalAlignment: Text.AlignVCenter
+            horizontalAlignment: Text.AlignHCenter
             color: "#FFFFFF"
             font.pixelSize: 13
             font.bold: true
