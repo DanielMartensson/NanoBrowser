@@ -192,7 +192,7 @@ ApplicationWindow {
 
         Behavior on opacity { NumberAnimation { duration: 250 } }
 
-        onCompleted: graphicsBanner.opacity = 1
+        Component.onCompleted: graphicsBanner.opacity = 1
 
         Text {
             anchors.fill: parent
