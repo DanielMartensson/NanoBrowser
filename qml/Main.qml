@@ -86,9 +86,62 @@ ApplicationWindow {
         }
     }
 
+    // Weston's desktop shell on this image has no xdg-decoration support, and Qt 6
+    // cannot ask for server-side decorations either, so the window draws its own
+    // slim title bar. Without it the window could not be moved or closed at all:
+    // dragging the bar asks the compositor for an interactive move
+    // (xdg_toplevel.move), which is what CSD clients do everywhere.
+    Rectangle {
+        id: titleBar
+        anchors { top: parent.top; left: parent.left; right: parent.right }
+        height: window.isFullscreen && !window.edgeHover ? 0 : 30
+        visible: height > 1
+        opacity: height === 0 ? 0 : 1
+        clip: true
+        color: "#101521"
+
+        Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.InOutQuad } }
+        Behavior on opacity { NumberAnimation { duration: 180 } }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            onPressed: window.startSystemMove()
+        }
+
+        Text {
+            anchors {
+                left: parent.left
+                leftMargin: 12
+                right: closeButton.left
+                rightMargin: 10
+                verticalCenter: parent.verticalCenter
+            }
+            text: webView.title.length > 0 ? webView.title : "NanoBrowser"
+            color: "#98A1B3"
+            font.pixelSize: 12
+            elide: Text.ElideRight
+        }
+
+        NavButton {
+            id: closeButton
+            anchors {
+                right: parent.right
+                rightMargin: 6
+                verticalCenter: parent.verticalCenter
+            }
+            width: 30
+            height: 22
+            font.pixelSize: 13
+            text: "\u2715"
+            tip: "Close NanoBrowser"
+            onClicked: window.close()
+        }
+    }
+
     Rectangle {
         id: topBar
-        anchors { top: parent.top; left: parent.left; right: parent.right }
+        anchors { top: titleBar.bottom; left: parent.left; right: parent.right }
         height: window.isFullscreen && !window.edgeHover ? 0 : window.barHeight
         visible: height > 1
         opacity: height === 0 ? 0 : 1
@@ -423,5 +476,44 @@ ApplicationWindow {
 
         onPositionChanged: window.edgeHover = mouseY < 45
         onExited: window.edgeHover = false
+    }
+
+    // There is no compositor-side frame either, so the window also resizes
+    // itself: pressing an edge asks for an interactive resize
+    // (xdg_toplevel.resize).
+    MouseArea {
+        anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
+        width: 6
+        cursorShape: Qt.SizeHorCursor
+        acceptedButtons: Qt.LeftButton
+        visible: !window.isFullscreen
+        onPressed: window.startSystemResize(Qt.LeftEdge)
+    }
+
+    MouseArea {
+        anchors { top: parent.top; bottom: parent.bottom; right: parent.right }
+        width: 6
+        cursorShape: Qt.SizeHorCursor
+        acceptedButtons: Qt.LeftButton
+        visible: !window.isFullscreen
+        onPressed: window.startSystemResize(Qt.RightEdge)
+    }
+
+    MouseArea {
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: 6
+        cursorShape: Qt.SizeVerCursor
+        acceptedButtons: Qt.LeftButton
+        visible: !window.isFullscreen
+        onPressed: window.startSystemResize(Qt.BottomEdge)
+    }
+
+    MouseArea {
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        height: 6
+        cursorShape: Qt.SizeVerCursor
+        acceptedButtons: Qt.LeftButton
+        visible: !window.isFullscreen
+        onPressed: window.startSystemResize(Qt.TopEdge)
     }
 }

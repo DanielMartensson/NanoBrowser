@@ -53,11 +53,12 @@ static QString graphicsLogPath()
 static void appendGraphicsLog()
 {
     const QString path = graphicsLogPath();
-    // QDir::absolutePath() gives the directory part (leftOfLastPathSeparator
-    // is not available in the target Qt build).
-    const QString dir = QDir(path).absolutePath();
+    // QFileInfo::absolutePath() is the directory the log file lives in;
+    // QDir::absolutePath() would hand back the file path itself and create a
+    // *directory* named graphics.log (which is what happened on the board).
+    const QString dir = QFileInfo(path).absolutePath();
     if (!dir.isEmpty() && !QDir(dir).exists())
-        QDir(dir).mkdir(dir);
+        QDir().mkpath(dir);
 
     const QString line = QString("%1 %2 %3\n").arg(
                               QDateTime::currentDateTime().toString(Qt::ISODate),
@@ -476,27 +477,49 @@ int main(int argc, char *argv[])
         qputenv("FONTCONFIG_PATH", "/etc/fonts");
     }
 
-    // --ignore-gpu-blocklist: the VeriSilicon GPU is not on Chromium's allow list.
-    // --enable-gpu-rasterization / --enable-zero-copy: rasterise tiles on the GPU
-    //   and keep frames on the GPU instead of reading them back to the CPU, which
-    //   is what makes the dual Cortex-A35 of the STM32MP25 usable at all.
-    // --enable-unsafe-swiftshader: keep a software fallback so that the GPU
-    //   process survives features the Vulkan/GL driver rejects.
-    // --disable-features=WebGPU: the target build of Qt WebEngine has no WebGPU.
-    const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
-    const QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist "
-                                  "--enable-gpu-rasterization --enable-zero-copy "
-                                  "--disable-features=WebGPU";
-    if (!baseFlags.contains(extraFlags))
-        qputenv("QTWEBENGINE_CHROMIUM_FLAGS", baseFlags.isEmpty()
-            ? extraFlags
-            : baseFlags + " " + extraFlags);
-
     preferVulkanCapablePlatform();
 
     QGuiApplication app(argc, argv);
 
     pickGraphicsApi();
+
+    // The Chromium flags depend on which renderer Qt Quick ended up with:
+    // --ignore-gpu-blocklist: the VeriSilicon GPU is not on Chromium's allow list.
+    // --enable-unsafe-swiftshader: keep a software fallback so that the GPU
+    //   process survives features the Vulkan/GL driver rejects.
+    // --disable-features=WebGPU: the target build of Qt WebEngine has no WebGPU.
+    //
+    // With the OpenGL renderer Qt and Chromium share one GL context, so Chromium
+    // can keep its tiles on the GPU (--enable-gpu-rasterization) and hand them to
+    // Qt without a round trip through system memory (--enable-zero-copy). That is
+    // what makes the two Cortex-A35 cores of the STM32MP25 usable at all.
+    //
+    // With the Vulkan renderer there is no such shared GL context. Chromium then
+    // presents through its own Vulkan path, which exports the rendered image as a
+    // dma-buf file descriptor via vkGetMemoryFdKHR() - something the Vivante
+    // Vulkan driver on this SoC cannot do. Chromium aborts the whole process with
+    // "Unable to extract file descriptor out of external VkImage", so Chromium has
+    // to stay in software (--disable-gpu) while Qt Quick still composites on the
+    // GPU through Vulkan. Video is decoded by the VPU in both cases, see
+    // HardwarePlayer.
+    const bool vulkanRenderer = (g_graphicsApi == QLatin1String("Vulkan"));
+    QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist "
+                            "--disable-features=WebGPU ";
+    extraFlags += vulkanRenderer
+        ? QByteArray("--disable-gpu")
+        : QByteArray("--enable-gpu-rasterization --enable-zero-copy");
+    const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
+    if (!baseFlags.contains(extraFlags))
+        qputenv("QTWEBENGINE_CHROMIUM_FLAGS", baseFlags.isEmpty()
+            ? extraFlags
+            : baseFlags + " " + extraFlags);
+
+    if (vulkanRenderer) {
+        qInfo("NanoBrowser: Chromium stays off its own GPU path (the Vivante Vulkan "
+              "driver cannot export external memory as a file descriptor); Qt Quick "
+              "composites on the GPU and the VPU decodes video");
+    }
+    qInfo("NanoBrowser: Chromium flags: %s", extraFlags.constData());
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     QtWebEngineQuick::initialize();

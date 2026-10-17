@@ -110,12 +110,15 @@ output again, remove that handler or run with `QT_LOGGING_RULES='*' ./run.sh`.
 - `src/main.cpp` also exposes `HardwarePlayer` to QML (`hardwarePlayer`), which
   resolves a YouTube page with `yt-dlp` and plays the H.264/AAC streams on the
   VPU with GStreamer.
-- `qml/Main.qml` lays out the top bar (navigation buttons, address bar, progress),
-  a `WebEngineView` with `webGLEnabled`, the hardware-playback card and a
-  fullscreen auto-hide header.
+- `qml/Main.qml` lays out a client-side title bar (drag to move, edges to
+  resize - Weston draws no decorations and Qt cannot request them), the top bar
+  (navigation buttons, address bar, progress), a `WebEngineView` with
+  `webGLEnabled`, the hardware-playback card and a fullscreen auto-hide header.
 - Chromium starts with `--enable-unsafe-swiftshader --ignore-gpu-blocklist
-  --enable-gpu-rasterization --enable-zero-copy --disable-features=WebGPU`
-  (`QTWEBENGINE_CHROMIUM_FLAGS`).
+  --disable-features=WebGPU` plus `--enable-gpu-rasterization --enable-zero-copy`
+  under the OpenGL renderer or `--disable-gpu` under the Vulkan renderer, where
+  Chromium's own Vulkan presenter would abort the process (`QTWEBENGINE_CHROMIUM_FLAGS`).
+  The chosen flags are logged at startup.
 
 ## Hardware video decoding on the STM32MP257F
 
