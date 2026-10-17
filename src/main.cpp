@@ -55,10 +55,14 @@ static void appendGraphicsLog()
     const QString path = graphicsLogPath();
     // QFileInfo::absolutePath() is the directory the log file lives in;
     // QDir::absolutePath() would hand back the file path itself and create a
-    // *directory* named graphics.log (which is what happened on the board).
-    const QString dir = QFileInfo(path).absolutePath();
-    if (!dir.isEmpty() && !QDir(dir).exists())
-        QDir().mkpath(dir);
+    // *directory* named graphics.log (which is what happened on the board -
+    // and such a leftover keeps QFile::open() failing on every later run).
+    const QFileInfo info(path);
+    const QString dir = info.absolutePath();
+    if (!dir.isEmpty() && !QDir(dir).exists() && !QDir().mkpath(dir))
+        return;
+    if (info.isDir())
+        QDir().rmdir(path);
 
     const QString line = QString("%1 %2 %3\n").arg(
                               QDateTime::currentDateTime().toString(Qt::ISODate),
