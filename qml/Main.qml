@@ -31,10 +31,24 @@ ApplicationWindow {
     // Hardware (VPU) playback of YouTube pages, implemented in src/main.cpp.
     property bool youtubeOffer: false
     property string hwErrorText: ""
-    readonly property bool youtubePage: window.isPlayablePage(webView.url)
+    // The URL the page itself reports. webView.url follows the loads the app
+    // asks for, but YouTube moves between videos with history.pushState, which
+    // never loads a page - and a watch page opened any other way (a link, the
+    // DevTools protocol) leaves webView.url pointing at the page before it. The
+    // offer bar and the hardware player both need the page the user is looking
+    // at, so they ask the page.
+    property string pageUrl: ""
+    readonly property bool youtubePage: window.isPlayablePage(window.pageUrl)
     readonly property bool hwCardVisible: hardwarePlayer.status.length > 0
                                            || hardwarePlayer.title.length > 0
                                            || window.hwErrorText.length > 0
+
+    function refreshPageUrl() {
+        webView.runJavaScript("location.href", function (href) {
+            window.pageUrl = href ? href.toString() : ""
+            window.youtubeOffer = window.isPlayablePage(window.pageUrl)
+        })
+    }
 
     function isPlayablePage(u) {
         var s = u.toString()
@@ -52,7 +66,7 @@ ApplicationWindow {
         window.youtubeOffer = false
         window.hwErrorText = ""
         webView.runJavaScript("document.querySelectorAll('video').forEach(function (v) { v.pause(); v.muted = true })")
-        hardwarePlayer.play(webView.url)
+        hardwarePlayer.play(window.pageUrl.length > 0 ? window.pageUrl : webView.url)
     }
 
     function loadUrl() {
@@ -462,9 +476,21 @@ ApplicationWindow {
         url: "https://duckduckgo.com/"
         onUrlChanged: {
             addressBar.text = url.toString()
-            window.youtubeOffer = window.isPlayablePage(url)
+            window.pageUrl = url.toString()
+            window.youtubeOffer = window.isPlayablePage(window.pageUrl)
         }
         onJavaScriptConsoleMessage: {}
+    }
+
+    // YouTube moves between videos without loading a page, so poll what the
+    // page reports itself; a second costs nothing and keeps the offer bar and
+    // the play button in step with what is on screen.
+    Timer {
+        interval: 1000
+        repeat: true
+        running: true
+        triggeredOnStart: true
+        onTriggered: window.refreshPageUrl()
     }
 
     MouseArea {
