@@ -272,11 +272,14 @@ ApplicationWindow {
                 onClicked: window.toggleFullscreen()
             }
 
-            NavButton {
-                text: "\u25B6"
-                tip: "Play this video with the hardware decoder (VPU, F8)"
-                enabled: window.youtubePage && hardwarePlayer.available
-                onClicked: window.playWithHardware()
+            // The hardware player still has its F8 shortcut and the offer bar
+            // that appears on a video page; the toolbar had a play button whose
+            // triangle (U+25B6) is missing from the fonts on this image, so the
+            // slot is used for a reload button instead.
+            IconButton {
+                icon: "reload"
+                tip: "Reload this page"
+                onClicked: webView.reload()
             }
 
             Rectangle {
