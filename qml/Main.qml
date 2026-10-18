@@ -29,15 +29,23 @@ ApplicationWindow {
     property bool edgeHover: false
     property int barHeight: 62
 
-    // Hardware (VPU) playback of YouTube pages, implemented in src/main.cpp.
-    property bool youtubeOffer: false
+    // Hardware (VPU) playback of video pages, implemented in src/main.cpp.
+    //
+    // It happens by itself. A video page is handed to the VPU as soon as it is
+    // open; there is no "play this with the hardware decoder?" question to
+    // answer. The program can tell that a page carries a video and that the
+    // decoder is there, so asking was never the user's job. Set
+    // NANOBROWSER_AUTO_VPU=0 to go back to handing over by hand (F8).
+    property bool autoHardware: hardwareAutoStart
     property string hwErrorText: ""
+    // The page that was last handed to the VPU. The poll below runs once a
+    // second, so without this the same video would be resolved over and over.
+    property string hwHandedOverUrl: ""
     // The URL the page itself reports. webView.url follows the loads the app
     // asks for, but YouTube moves between videos with history.pushState, which
     // never loads a page - and a watch page opened any other way (a link, the
     // DevTools protocol) leaves webView.url pointing at the page before it. The
-    // offer bar and the hardware player both need the page the user is looking
-    // at, so they ask the page.
+    // hardware player needs the page the user is looking at, so it asks the page.
     property string pageUrl: ""
     readonly property bool youtubePage: window.isPlayablePage(window.pageUrl)
     readonly property bool hwCardVisible: hardwarePlayer.status.length > 0
@@ -47,7 +55,7 @@ ApplicationWindow {
     function refreshPageUrl() {
         webView.runJavaScript("location.href", function (href) {
             window.pageUrl = href ? href.toString() : ""
-            window.youtubeOffer = window.isPlayablePage(window.pageUrl)
+            window.handOverToHardware()
         })
     }
 
@@ -59,15 +67,53 @@ ApplicationWindow {
             || s.indexOf("youtu.be/") >= 0
     }
 
+    // Starts the VPU on a video page, once per video. The remembered URL is
+    // dropped while the page is not a video page, so walking back to a video
+    // (or opening it again) starts the decoder again.
+    function handOverToHardware() {
+        if (!window.isPlayablePage(window.pageUrl)) {
+            window.hwHandedOverUrl = ""
+            return
+        }
+        if (!window.autoHardware)
+            return
+        if (!hardwarePlayer.available) {
+            // Say so once: with the bar gone there is nothing else that would
+            // explain why the video is still being decoded in software.
+            if (window.hwHandedOverUrl !== window.pageUrl) {
+                window.hwHandedOverUrl = window.pageUrl
+                window.hwErrorText = "Hardware decoder unavailable: yt-dlp, "
+                    + "gst-launch-1.0 or /dev/video5 is missing"
+                hwErrorTimer.restart()
+            }
+            return
+        }
+        if (window.pageUrl === window.hwHandedOverUrl || hardwarePlayer.playing)
+            return
+        window.playWithHardware()
+    }
+
     // Hands the page over to the VPU: the video is streamed straight from
     // YouTube and decoded by v4l2slh264dec (H.264), audio goes to PipeWire.
     // The page's own player is paused and muted so that there is only one
     // audio source and the CPU does not decode the video a second time.
     function playWithHardware() {
-        window.youtubeOffer = false
+        window.hwHandedOverUrl = window.pageUrl
         window.hwErrorText = ""
         webView.runJavaScript("document.querySelectorAll('video').forEach(function (v) { v.pause(); v.muted = true })")
         hardwarePlayer.play(window.pageUrl.length > 0 ? window.pageUrl : webView.url)
+    }
+
+    // Gives the page's own player back: used when the VPU could not take the
+    // video after all, so that a failed handover does not leave the page with
+    // a paused player and no picture.
+    function resumePageVideo() {
+        webView.runJavaScript("document.querySelectorAll('video').forEach(function (v) { v.muted = false; v.play() })")
+    }
+
+    function stopHardware() {
+        hardwarePlayer.stop()
+        window.resumePageVideo()
     }
 
     function loadUrl() {
@@ -272,10 +318,9 @@ ApplicationWindow {
                 onClicked: window.toggleFullscreen()
             }
 
-            // The hardware player still has its F8 shortcut and the offer bar
-            // that appears on a video page; the toolbar had a play button whose
-            // triangle (U+25B6) is missing from the fonts on this image, so the
-            // slot is used for a reload button instead.
+            // The video pages go to the VPU by themselves now; the toolbar had a
+            // play button whose triangle (U+25B6) is missing from the fonts on
+            // this image, so the slot is used for a reload button instead.
             IconButton {
                 glyph: "reload"
                 tip: "Reload this page"
@@ -430,59 +475,14 @@ ApplicationWindow {
             IconButton {
                 glyph: "stop"
                 tip: "Stop hardware playback"
-                onClicked: hardwarePlayer.stop()
+                onClicked: window.stopHardware()
             }
         }
     }
 
-    // Offered whenever a YouTube video page is opened.
-    Rectangle {
-        id: youtubeBar
-        z: 55
-        anchors {
-            left: parent.left
-            right: parent.right
-            bottom: parent.bottom
-        }
-        height: 58
-        color: "#241B4D"
-        border.color: "#7C5CFC"
-        border.width: 1
-        opacity: (window.youtubeOffer && hardwarePlayer.available && !window.hwCardVisible) ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-
-        RowLayout {
-            anchors {
-                fill: parent
-                leftMargin: 14
-                rightMargin: 12
-                topMargin: 9
-                bottomMargin: 9
-            }
-            spacing: 10
-
-            Text {
-                Layout.fillWidth: true
-                elide: Text.ElideRight
-                color: "#E8EAF2"
-                font.pixelSize: 13
-                text: "YouTube video \u2014 play it with the hardware decoder (VPU, H.264)"
-            }
-
-            IconButton {
-                glyph: "play"
-                tip: "Play with the VPU"
-                onClicked: window.playWithHardware()
-            }
-
-            IconButton {
-                glyph: "close"
-                tip: "Not now"
-                onClicked: window.youtubeOffer = false
-            }
-        }
-    }
+    // There is no bar asking whether to use the VPU: the handover above is
+    // automatic, so all that is left on screen is the card that says what the
+    // decoder is doing and how to stop it.
 
     Timer {
         id: hwErrorTimer
@@ -496,6 +496,7 @@ ApplicationWindow {
         function onFailed(reason) {
             window.hwErrorText = reason
             hwErrorTimer.restart()
+            window.resumePageVideo()
         }
     }
 
@@ -520,13 +521,13 @@ ApplicationWindow {
         onUrlChanged: {
             addressBar.text = url.toString()
             window.pageUrl = url.toString()
-            window.youtubeOffer = window.isPlayablePage(window.pageUrl)
+            window.handOverToHardware()
         }
         onJavaScriptConsoleMessage: {}
     }
 
     // YouTube moves between videos without loading a page, so poll what the
-    // page reports itself; a second costs nothing and keeps the offer bar and
+    // page reports itself; a second costs nothing and keeps the handover and
     // the play button in step with what is on screen.
     Timer {
         interval: 1000

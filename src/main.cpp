@@ -632,6 +632,13 @@ int main(int argc, char *argv[])
     qInfo("NanoBrowser: Chromium GPU mode '%s', flags: %s",
           gpuMode.toUtf8().constData(), extraFlags.constData());
 
+    // Video pages are handed to the VPU on their own; NANOBROWSER_AUTO_VPU=0
+    // leaves that to the F8 shortcut for anyone who wants to drive it by hand.
+    const QByteArray autoVpu = qgetenv("NANOBROWSER_AUTO_VPU");
+    const bool hardwareAutoStart = autoVpu != QLatin1String("0");
+    qInfo("NanoBrowser: VPU handover: %s", hardwareAutoStart
+          ? "automatic on video pages" : "F8 only (NANOBROWSER_AUTO_VPU=0)");
+
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     QtWebEngineQuick::initialize();
 #endif
@@ -653,6 +660,7 @@ int main(int argc, char *argv[])
     if (context) {
         context->setContextProperty("graphicsApi", g_graphicsApi);
         context->setContextProperty("graphicsReason", g_graphicsReason);
+        context->setContextProperty("hardwareAutoStart", hardwareAutoStart);
         context->setContextProperty("hardwarePlayer", &hardwarePlayer);
     }
 
