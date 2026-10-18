@@ -14,7 +14,12 @@ Button {
 
     property string tip: ""
     // "reload", "play", "stop" or "close".
-    property string icon: "reload"
+    //
+    // It is called glyph and not icon on purpose: Button already has a FINAL
+    // icon property in Qt Quick Controls, and a property of that name here
+    // makes the whole file fail to load ("Cannot override FINAL property"),
+    // which takes the entire window down with it.
+    property string glyph: "reload"
 
     width: 40
     height: 36
@@ -43,7 +48,7 @@ Button {
         Connections {
             target: ctl
             function onIconColorChanged() { iconCanvas.requestPaint() }
-            function onIconChanged() { iconCanvas.requestPaint() }
+            function onGlyphChanged() { iconCanvas.requestPaint() }
         }
 
         onPaint: {
@@ -55,7 +60,7 @@ Button {
             ctx.lineCap = "round"
             ctx.lineJoin = "round"
 
-            if (ctl.icon === "reload") {
+            if (ctl.glyph === "reload") {
                 // A ring with a gap at the top right, and the arrow head on the
                 // gap's lower end so that it points the way the ring runs.
                 var cx = 9, cy = 9, r = 5.9
@@ -74,18 +79,18 @@ Button {
                 ctx.lineTo(px - tx * 0.4 - nx * 2.6, py - ty * 0.4 - ny * 2.6)
                 ctx.closePath()
                 ctx.fill()
-            } else if (ctl.icon === "play") {
+            } else if (ctl.glyph === "play") {
                 ctx.beginPath()
                 ctx.moveTo(5.6, 4.0)
                 ctx.lineTo(14.0, 9.0)
                 ctx.lineTo(5.6, 14.0)
                 ctx.closePath()
                 ctx.fill()
-            } else if (ctl.icon === "stop") {
+            } else if (ctl.glyph === "stop") {
                 ctx.beginPath()
                 ctx.rect(5.0, 5.0, 8.0, 8.0)
                 ctx.fill()
-            } else if (ctl.icon === "close") {
+            } else if (ctl.glyph === "close") {
                 ctx.beginPath()
                 ctx.moveTo(5.2, 5.2)
                 ctx.lineTo(12.8, 12.8)

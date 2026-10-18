@@ -277,7 +277,7 @@ ApplicationWindow {
             // triangle (U+25B6) is missing from the fonts on this image, so the
             // slot is used for a reload button instead.
             IconButton {
-                icon: "reload"
+                glyph: "reload"
                 tip: "Reload this page"
                 onClicked: webView.reload()
             }
@@ -428,7 +428,7 @@ ApplicationWindow {
             }
 
             IconButton {
-                icon: "stop"
+                glyph: "stop"
                 tip: "Stop hardware playback"
                 onClicked: hardwarePlayer.stop()
             }
@@ -471,13 +471,13 @@ ApplicationWindow {
             }
 
             IconButton {
-                icon: "play"
+                glyph: "play"
                 tip: "Play with the VPU"
                 onClicked: window.playWithHardware()
             }
 
             IconButton {
-                icon: "close"
+                glyph: "close"
                 tip: "Not now"
                 onClicked: window.youtubeOffer = false
             }
