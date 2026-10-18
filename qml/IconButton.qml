@@ -36,51 +36,60 @@ Button {
         Behavior on color { ColorAnimation { duration: 120 } }
     }
 
-    contentItem: Canvas {
-        id: iconCanvas
-        width: 18
-        height: 18
+    // The canvas lives in an Item with an implicit size, exactly like the icon
+    // on the fullscreen button next to it. width/height alone are not enough: a
+    // RowLayout gives an item its implicit size, not its width, so a bare Canvas
+    // (whose implicit size is 0) made the button collapse into a small round
+    // blob while its neighbours kept their size.
+    contentItem: Item {
+        implicitWidth: 18
+        implicitHeight: 18
         anchors.centerIn: parent
-        antialiasing: true
 
-        Connections {
-            target: ctl
-            function onIconColorChanged() { iconCanvas.requestPaint() }
-            function onGlyphChanged() { iconCanvas.requestPaint() }
-        }
+        Canvas {
+            id: iconCanvas
+            anchors.fill: parent
+            antialiasing: true
 
-        onPaint: {
-            var ctx = getContext("2d")
-            ctx.reset()
-            ctx.strokeStyle = ctl.iconColor
-            ctx.fillStyle = ctl.iconColor
-            ctx.lineWidth = 2.0
-            ctx.lineCap = "round"
-            ctx.lineJoin = "round"
+            Connections {
+                target: ctl
+                function onIconColorChanged() { iconCanvas.requestPaint() }
+                function onGlyphChanged() { iconCanvas.requestPaint() }
+            }
 
-            // The circular arrow browsers use for reload: a ring with a gap at
-            // the top right and an arrow head at the top of the ring, pointing
-            // the way the ring runs (clockwise). The ring is 14 px across, the
-            // same as the fullscreen bracket on the button next to it, and the
-            // 2 px stroke takes it from y=1 to y=17 on the 18 px canvas.
-            var cx = 9, cy = 9, r = 7.0
-            var aEnd = -1.257          // -72 degrees: just right of the top
-            var aStart = aEnd - 5.03   // 288 degrees of ring
-            ctx.beginPath()
-            ctx.arc(cx, cy, r, aStart, aEnd, false)
-            ctx.stroke()
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                ctx.strokeStyle = ctl.iconColor
+                ctx.fillStyle = ctl.iconColor
+                ctx.lineWidth = 2.0
+                ctx.lineCap = "round"
+                ctx.lineJoin = "round"
 
-            // Head as a filled triangle sitting on the ring's end, along the
-            // tangent, so it reads as an arrow rather than a blob.
-            var tx = -Math.sin(aEnd), ty = Math.cos(aEnd)
-            var nx = -ty, ny = tx
-            var px = cx + r * Math.cos(aEnd), py = cy + r * Math.sin(aEnd)
-            ctx.beginPath()
-            ctx.moveTo(px + tx * 3.2, py + ty * 3.2)
-            ctx.lineTo(px - tx * 0.5 + nx * 2.0, py - ty * 0.5 + ny * 2.0)
-            ctx.lineTo(px - tx * 0.5 - nx * 2.0, py - ty * 0.5 - ny * 2.0)
-            ctx.closePath()
-            ctx.fill()
+                // The circular arrow browsers use for reload: a ring with a gap
+                // at the top right and an arrow head at the top of the ring,
+                // pointing the way the ring runs (clockwise). The ring is 14 px
+                // across, the same as the fullscreen bracket on the button next
+                // to it, and the 2 px stroke takes it from y=1 to y=17.
+                var cx = 9, cy = 9, r = 7.0
+                var aEnd = -1.257          // -72 degrees: just right of the top
+                var aStart = aEnd - 5.03   // 288 degrees of ring
+                ctx.beginPath()
+                ctx.arc(cx, cy, r, aStart, aEnd, false)
+                ctx.stroke()
+
+                // Head as a filled triangle sitting on the ring's end, along the
+                // tangent, so it reads as an arrow rather than a blob.
+                var tx = -Math.sin(aEnd), ty = Math.cos(aEnd)
+                var nx = -ty, ny = tx
+                var px = cx + r * Math.cos(aEnd), py = cy + r * Math.sin(aEnd)
+                ctx.beginPath()
+                ctx.moveTo(px + tx * 3.2, py + ty * 3.2)
+                ctx.lineTo(px - tx * 0.5 + nx * 2.0, py - ty * 0.5 + ny * 2.0)
+                ctx.lineTo(px - tx * 0.5 - nx * 2.0, py - ty * 0.5 - ny * 2.0)
+                ctx.closePath()
+                ctx.fill()
+            }
         }
     }
 
