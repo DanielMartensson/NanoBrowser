@@ -15,7 +15,10 @@
 #include <QDebug>
 #include <QStandardPaths>
 #include <QVarLengthArray>
+#include <QVersionNumber>
 #include <QtGlobal>
+#include <clocale>
+#include <langinfo.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
@@ -193,6 +196,12 @@ static void pickGraphicsApi()
     }
 
     QVulkanInstance probe;
+    // The VeriSilicon ICD on the target refuses a VkApplicationInfo whose
+    // apiVersion is 0 ("value of 0 which is not permitted") and prints an ERROR
+    // line about it before the window exists. Qt leaves the field at 0 unless a
+    // version is set, so ask for the lowest version Vulkan defines - this probe
+    // only enumerates devices, it never creates one.
+    probe.setApiVersion(QVersionNumber(1, 0));
     const bool instanceCreated = probe.create();
     const bool hardwareSuitable = instanceCreated
         && vulkanHardwareAvailable(probe);
@@ -254,6 +263,32 @@ static void preferVulkanCapablePlatform()
             return;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// A UTF-8 character type
+// ---------------------------------------------------------------------------
+//
+// The image ships en_US.UTF-8 in /usr/lib/locale/locale-archive, but sessions
+// start with LANG=C, and Qt then warns that it depends on a UTF-8 locale. That
+// warning is printed once per Qt process, and Qt's text handling really does
+// want UTF-8: with an ASCII character type, QString::fromLocal8Bit() mangles
+// non-ASCII paths and environment values.
+//
+// Only LC_CTYPE is changed. Number, date and collation formats keep following
+// whatever the session asks for, and LANG is left alone, so Chromium still
+// picks the same UI language and sends the same Accept-Language header.
+static void preferUtf8CharacterType()
+{
+    if (setlocale(LC_CTYPE, "") == nullptr)
+        return;
+    const QByteArray codeset = nl_langinfo(CODESET);
+    if (codeset == "UTF-8")
+        return;
+    if (setlocale(LC_CTYPE, "en_US.UTF-8") == nullptr)
+        return;   // no UTF-8 locale in the image; nothing to switch to
+    qputenv("LC_CTYPE", "en_US.UTF-8");
+    qInfo("NanoBrowser: character type was %s, using en_US.UTF-8", codeset.constData());
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +373,7 @@ int main(int argc, char *argv[])
     }
 
     preferVulkanCapablePlatform();
+    preferUtf8CharacterType();
 
     QGuiApplication app(argc, argv);
 

@@ -321,8 +321,12 @@ ApplicationWindow {
     WebEngineProfile {
         id: browserProfile
         storageName: "nanobrowser"
-        offTheRecord: false
         persistentCookiesPolicy: WebEngineProfile.ForcePersistentCookies
+        // A profile starts out off-the-record, and Qt refuses to switch one to
+        // disk-based storage before it has a storage name: it warns "Storage
+        // name is empty ..." and waits for storageNameChanged. Turn it on once
+        // the name is in place instead, so the switch happens without a warning.
+        Component.onCompleted: offTheRecord = false
     }
 
     WebEngineView {
