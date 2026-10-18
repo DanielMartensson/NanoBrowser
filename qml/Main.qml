@@ -285,6 +285,12 @@ ApplicationWindow {
         }
     }
 
+    // There is nothing to announce when Qt Quick composites on Vulkan - that is
+    // what this board is supposed to do, and which API was picked is written to
+    // graphics.log on every start. The banner is only left for the case that
+    // matters: Vulkan was not available and Qt fell back to OpenGL, which is
+    // worth a warning because everything then runs through a driver that is not
+    // the intended one.
     Rectangle {
         id: graphicsBanner
         anchors {
@@ -295,9 +301,9 @@ ApplicationWindow {
         height: 44
         z: 50
         clip: true
-        visible: true
+        visible: graphicsApi !== "Vulkan"
         opacity: 0
-        color: (graphicsApi === "Vulkan") ? "#1E3D2E" : "#8A4A00"
+        color: "#8A4A00"
 
         Behavior on opacity { NumberAnimation { duration: 250 } }
 
@@ -310,18 +316,7 @@ ApplicationWindow {
             color: "#FFFFFF"
             font.pixelSize: 13
             font.bold: true
-            text: (graphicsApi === "Vulkan")
-                  ? "Vulkan"
-                  : "OpenGL fallback \u2014 " + graphicsReason
-        }
-
-        Timer {
-            id: graphicsBannerTimer
-            interval: 4500
-            onTriggered: {
-                opacity = 0
-                graphicsBannerTimer.stop()
-            }
+            text: "OpenGL fallback \u2014 " + graphicsReason
         }
     }
 
