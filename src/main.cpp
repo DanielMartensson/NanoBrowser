@@ -484,7 +484,7 @@ private:
 
     void startPipeline(const QString &videoUrl, const QString &audioUrl)
     {
-        QStringList args{ QStringLiteral("-q") };
+        QStringList pipelines;
         // Without a reachable sound server, pulsesink fails and takes the rest
         // of the pipeline (the picture) down with it, so leave the audio out.
         const QString muxedAudio = g_soundServerAvailable
@@ -494,17 +494,27 @@ private:
 
         if (audioUrl.isEmpty()) {
             // Muxed stream: qtdemux splits video and audio dynamically.
-            args << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux name=d "
-                                   "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2%3")
-                        .arg(videoUrl, sink(), muxedAudio);
+            pipelines << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux name=d "
+                                        "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2%3")
+                             .arg(videoUrl, sink(), muxedAudio);
         } else {
-            args << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! h264parse ! v4l2slh264dec ! queue ! %2")
-                        .arg(videoUrl, sink());
+            pipelines << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! h264parse ! v4l2slh264dec ! queue ! %2")
+                             .arg(videoUrl, sink());
             if (g_soundServerAvailable)
-                args << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! queue ! aacparse ! avdec_aac "
-                                       "! audioconvert ! audioresample ! pulsesink")
-                            .arg(audioUrl);
+                pipelines << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! queue ! aacparse ! avdec_aac "
+                                            "! audioconvert ! audioresample ! pulsesink")
+                                 .arg(audioUrl);
         }
+
+        // gst-launch treats every argument as one token: giving it the whole
+        // pipeline as a single argument fails with "erroneous pipeline: syntax
+        // error" (seen with GStreamer 1.22.12 on the board), while the same
+        // text split into words is accepted. The pipelines above have no spaces
+        // inside a value - the stream URLs are percent-encoded - so splitting
+        // on spaces is exact.
+        QStringList args{ QStringLiteral("-q") };
+        for (const QString &pipeline : pipelines)
+            args << pipeline.split(QLatin1Char(' '), Qt::SkipEmptyParts);
 
         if (!m_play) {
             m_play = new QProcess(this);
