@@ -17,6 +17,8 @@
 #include <QStandardPaths>
 #include <QVarLengthArray>
 #include <QtGlobal>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vulkan/vulkan.h>
 
 // NOTE: The target's Qt 6.8 (OpenSTLinux) is a trimmed/renamed Qt build.
@@ -259,6 +261,61 @@ static void preferVulkanCapablePlatform()
 // Playing YouTube videos with the hardware video decoder
 // ---------------------------------------------------------------------------
 //
+// Whether a PulseAudio/PipeWire socket could be pointed at (see below). The
+// hardware player builds its pipeline from this: without a sound server the
+// audio branch is left out instead of letting pulsesink fail the whole
+// pipeline and take the picture with it.
+static bool g_soundServerAvailable = false;
+
+// The sound server is not where libpulse looks by default on this image:
+// weston.service hands the session an XDG_RUNTIME_DIR of /home/weston, while
+// PipeWire keeps its socket in /run/user/<uid>/pulse/native. GStreamer inherits
+// this process' environment, so it is enough to point PULSE_SERVER at a socket
+// that really exists:
+//   * the socket in XDG_RUNTIME_DIR, when it is ours and really a socket;
+//   * otherwise our own /run/user/<uid>/pulse/native (the normal case when the
+//     browser is started with the wrong runtime directory);
+//   * as root, any /run/user/<uid>/pulse/native that is a socket (libpulse
+//     refuses a runtime directory it does not own, but connects happily when
+//     the socket is named explicitly).
+static bool prepareSoundServer()
+{
+    if (!qgetenv("PULSE_SERVER").isEmpty())
+        return true;
+
+    const QByteArray runtimeDir = qgetenv("XDG_RUNTIME_DIR");
+    const QByteArray ownDir = QByteArrayLiteral("/run/user/") + QByteArray::number(getuid());
+    struct stat info {};
+
+    const QByteArray sessionSocket = runtimeDir + QByteArrayLiteral("/pulse/native");
+    if (!runtimeDir.isEmpty()
+        && ::stat(sessionSocket.constData(), &info) == 0
+        && S_ISSOCK(info.st_mode) && info.st_uid == getuid())
+        return true;
+
+    const QByteArray ownSocket = ownDir + QByteArrayLiteral("/pulse/native");
+    if (::stat(ownSocket.constData(), &info) == 0
+        && S_ISSOCK(info.st_mode) && info.st_uid == getuid()) {
+        qputenv("PULSE_SERVER", QByteArrayLiteral("unix:") + ownSocket);
+        return true;
+    }
+
+    if (getuid() == 0) {
+        const QDir runUser(QStringLiteral("/run/user"));
+        const QStringList entries =
+            runUser.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QString &entry : entries) {
+            const QByteArray path = QByteArrayLiteral("/run/user/") + entry.toLocal8Bit()
+                + QByteArrayLiteral("/pulse/native");
+            if (::stat(path.constData(), &info) == 0 && S_ISSOCK(info.st_mode)) {
+                qputenv("PULSE_SERVER", QByteArrayLiteral("unix:") + path);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // The VPU of the STM32MP25 is a *stateless* V4L2 decoder (Hantro, /dev/video5)
 // for H.264 and VP8. This BSP has no VA-API at all, and Chromium does not
 // implement the stateless V4L2 API, so Qt WebEngine can never decode video in
@@ -309,6 +366,7 @@ public:
         stop();
         m_status = QStringLiteral("Resolving the H.264 stream (yt-dlp) ...");
         emit changed();
+        qInfo("NanoBrowser: hardware player: resolving %s", pageUrl.toUtf8().constData());
 
         if (!m_resolve) {
             m_resolve = new QProcess(this);
@@ -391,6 +449,10 @@ private:
     {
         const QString output = QString::fromUtf8(m_resolve->readAll()).trimmed();
         if (exitStatus != QProcess::NormalExit || exitCode != 0 || output.isEmpty()) {
+            qInfo("NanoBrowser: hardware player: yt-dlp failed (exit status %d, code %d, "
+                  "%d bytes of output)", static_cast<int>(exitStatus), exitCode, output.size());
+            if (!output.isEmpty())
+                qInfo("NanoBrowser: yt-dlp said: %s", output.toUtf8().constData());
             m_status.clear();
             emit changed();
             emit failed(QStringLiteral("yt-dlp could not resolve this page"));
@@ -407,11 +469,15 @@ private:
                 m_title = line;
         }
         if (urls.isEmpty()) {
+            qInfo("NanoBrowser: hardware player: no stream URL in yt-dlp's answer: %s",
+                  output.toUtf8().constData());
             m_status.clear();
             emit changed();
             emit failed(QStringLiteral("No playable H.264 stream found"));
             return;
         }
+        qInfo("NanoBrowser: hardware player: resolved \"%s\", %d stream URL(s)",
+              m_title.toUtf8().constData(), int(urls.size()));
         emit changed();
         startPipeline(urls.value(0), urls.value(1));
     }
@@ -419,19 +485,25 @@ private:
     void startPipeline(const QString &videoUrl, const QString &audioUrl)
     {
         QStringList args{ QStringLiteral("-q") };
+        // Without a reachable sound server, pulsesink fails and takes the rest
+        // of the pipeline (the picture) down with it, so leave the audio out.
+        const QString muxedAudio = g_soundServerAvailable
+            ? QStringLiteral(" d.audio_0 ! queue ! aacparse ! avdec_aac "
+                             "! audioconvert ! audioresample ! pulsesink")
+            : QString();
 
         if (audioUrl.isEmpty()) {
             // Muxed stream: qtdemux splits video and audio dynamically.
             args << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux name=d "
-                                   "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2 "
-                                   "d.audio_0 ! queue ! aacparse ! avdec_aac ! audioconvert ! audioresample ! pulsesink")
-                        .arg(videoUrl, sink());
+                                   "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2%3")
+                        .arg(videoUrl, sink(), muxedAudio);
         } else {
             args << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! h264parse ! v4l2slh264dec ! queue ! %2")
-                        .arg(videoUrl, sink())
-                 << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! queue ! aacparse ! avdec_aac "
-                                   "! audioconvert ! audioresample ! pulsesink")
-                        .arg(audioUrl);
+                        .arg(videoUrl, sink());
+            if (g_soundServerAvailable)
+                args << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! queue ! aacparse ! avdec_aac "
+                                       "! audioconvert ! audioresample ! pulsesink")
+                            .arg(audioUrl);
         }
 
         if (!m_play) {
@@ -445,7 +517,12 @@ private:
             m_play->waitForFinished(1000);
         }
         m_play->start(m_gstLaunch, args);
-        m_status = QStringLiteral("Hardware decoding: v4l2slh264dec (VPU) + AAC audio");
+        qInfo("NanoBrowser: hardware player: gst-launch-1.0 started (%s), log: %s",
+              g_soundServerAvailable ? "video + audio" : "video only, no sound server",
+              gstreamerLogPath().toUtf8().constData());
+        m_status = g_soundServerAvailable
+            ? QStringLiteral("Hardware decoding: v4l2slh264dec (VPU) + AAC audio")
+            : QStringLiteral("Hardware decoding: v4l2slh264dec (VPU), video only - no sound server");
         emit changed();
     }
 
@@ -487,6 +564,16 @@ int main(int argc, char *argv[])
 
     pickGraphicsApi();
 
+    // The hardware player hands this process' environment to gst-launch-1.0, so
+    // the sound server has to be found before the first pipeline starts. Note
+    // that this Qt build drops qWarning() output, which is why the result is
+    // reported with qInfo() and shown in the player's status line instead.
+    g_soundServerAvailable = prepareSoundServer();
+    const QByteArray pulseServer = qgetenv("PULSE_SERVER");
+    qInfo("NanoBrowser: sound server: %s", !g_soundServerAvailable ? "not found"
+          : pulseServer.isEmpty() ? "in XDG_RUNTIME_DIR"
+          : pulseServer.constData());
+
     // The Chromium flags depend on which renderer Qt Quick ended up with:
     // --ignore-gpu-blocklist: the VeriSilicon GPU is not on Chromium's allow list.
     // --enable-unsafe-swiftshader: keep a software fallback so that the GPU
@@ -498,32 +585,52 @@ int main(int argc, char *argv[])
     // Qt without a round trip through system memory (--enable-zero-copy). That is
     // what makes the two Cortex-A35 cores of the STM32MP25 usable at all.
     //
-    // With the Vulkan renderer there is no such shared GL context. Chromium then
-    // presents through its own Vulkan path, which exports the rendered image as a
-    // dma-buf file descriptor via vkGetMemoryFdKHR() - something the Vivante
-    // Vulkan driver on this SoC cannot do. Chromium aborts the whole process with
-    // "Unable to extract file descriptor out of external VkImage", so Chromium has
-    // to stay in software (--disable-gpu) while Qt Quick still composites on the
-    // GPU through Vulkan. Video is decoded by the VPU in both cases, see
-    // HardwarePlayer.
+    // With the Vulkan renderer there is no such shared GL context: "full" would
+    // have Chromium present through its own Vulkan path, which exports the
+    // rendered image as a dma-buf file descriptor via vkGetMemoryFdKHR() -
+    // something the Vivante Vulkan driver on this SoC cannot do, so Chromium
+    // aborts with "Unable to extract file descriptor out of external VkImage".
+    // "raster" keeps the GPU process (GPU rasterisation, working WebGL) and only
+    // composites in software, which is the part that must not go through Vulkan.
+    // Video is decoded by the VPU in either case, see HardwarePlayer.
+    // How far Chromium is allowed to use the GPU is decided separately from the
+    // renderer Qt Quick uses:
+    //   full   - GPU rasterisation and zero-copy textures; needs a GL context
+    //            shared with Qt, which is what the OpenGL renderer gives.
+    //   raster - GPU rasterisation, the frames come back through shared memory
+    //            because Qt has no GL context to share with Chromium.
+    //   off    - no GPU process at all. No WebGL and every pixel on the CPU.
+    // The default follows the renderer; NANOBROWSER_CHROMIUM_GPU overrides it,
+    // so the modes can be compared on a board without rebuilding.
+    //
+    // Under Vulkan the default is "raster", not "off": measured on the
+    // STM32MP257F, scrolling a Wikipedia article gave 33.7 fps against 33.3 fps
+    // in software, i.e. no regression, and WebGL 2.0 on the Vivante GPU becomes
+    // available at all instead of "GpuChannelHost creation failed". The Fish
+    // Tank runs at 6.2 fps that way (9.3 fps with OpenGL and zero copy, which is
+    // what NANOBROWSER_RENDERER=opengl is for).
     const bool vulkanRenderer = (g_graphicsApi == QLatin1String("Vulkan"));
+    QString gpuMode = QString::fromLocal8Bit(qgetenv("NANOBROWSER_CHROMIUM_GPU"));
+    if (gpuMode != QLatin1String("full") && gpuMode != QLatin1String("raster")
+            && gpuMode != QLatin1String("off"))
+        gpuMode = vulkanRenderer ? QStringLiteral("raster") : QStringLiteral("full");
+
     QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist "
                             "--disable-features=WebGPU ";
-    extraFlags += vulkanRenderer
-        ? QByteArray("--disable-gpu")
-        : QByteArray("--enable-gpu-rasterization --enable-zero-copy");
+    if (gpuMode == QLatin1String("full"))
+        extraFlags += "--enable-gpu-rasterization --enable-zero-copy";
+    else if (gpuMode == QLatin1String("raster"))
+        extraFlags += "--enable-gpu-rasterization --disable-gpu-compositing";
+    else
+        extraFlags += "--disable-gpu";
     const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
     if (!baseFlags.contains(extraFlags))
         qputenv("QTWEBENGINE_CHROMIUM_FLAGS", baseFlags.isEmpty()
             ? extraFlags
             : baseFlags + " " + extraFlags);
 
-    if (vulkanRenderer) {
-        qInfo("NanoBrowser: Chromium stays off its own GPU path (the Vivante Vulkan "
-              "driver cannot export external memory as a file descriptor); Qt Quick "
-              "composites on the GPU and the VPU decodes video");
-    }
-    qInfo("NanoBrowser: Chromium flags: %s", extraFlags.constData());
+    qInfo("NanoBrowser: Chromium GPU mode '%s', flags: %s",
+          gpuMode.toUtf8().constData(), extraFlags.constData());
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     QtWebEngineQuick::initialize();
