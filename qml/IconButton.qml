@@ -5,20 +5,17 @@ import QtQuick.Controls
 //
 // These controls used to be font glyphs, which only works as long as the image
 // happens to ship a font that has them. The Liberation set on this image has no
-// close cross (U+2715), no play triangle (U+25B6) and no reload symbol at all
-// (U+21BB, U+27F3, U+2B6E), so the buttons came out as empty squares. The icons
-// below are therefore drawn on a canvas, with coordinates that were rendered
-// off-screen and checked before they went in.
+// reload symbol at all (U+21BB, U+27F3, U+2B6E), so the button came out as an
+// empty square. The icon is therefore drawn on a canvas, with coordinates that
+// were rendered off-screen and checked before they went in.
 Button {
     id: ctl
 
     property string tip: ""
-    // "reload", "play", "stop" or "close".
-    //
-    // It is called glyph and not icon on purpose: Button already has a FINAL
-    // icon property in Qt Quick Controls, and a property of that name here
-    // makes the whole file fail to load ("Cannot override FINAL property"),
-    // which takes the entire window down with it.
+    // Called glyph and not icon on purpose: Button already has a FINAL icon
+    // property in Qt Quick Controls, and a property of that name here makes the
+    // whole file fail to load ("Cannot override FINAL property"), which takes
+    // the entire window down with it.
     property string glyph: "reload"
 
     width: 40
@@ -61,47 +58,29 @@ Button {
             ctx.lineCap = "round"
             ctx.lineJoin = "round"
 
-            if (ctl.glyph === "reload") {
-                // The circular arrow browsers use for reload: a ring with a gap
-                // at the top right and an arrow head at the top of the ring,
-                // pointing the way the ring runs (clockwise).
-                var cx = 9, cy = 9, r = 6.4
-                var aEnd = -1.257          // -72 degrees: just right of the top
-                var aStart = aEnd - 5.03   // 288 degrees of ring
-                ctx.beginPath()
-                ctx.arc(cx, cy, r, aStart, aEnd, false)
-                ctx.stroke()
+            // The circular arrow browsers use for reload: a ring with a gap at
+            // the top right and an arrow head at the top of the ring, pointing
+            // the way the ring runs (clockwise). The ring is 14 px across, the
+            // same as the fullscreen bracket on the button next to it, and the
+            // 2 px stroke takes it from y=1 to y=17 on the 18 px canvas.
+            var cx = 9, cy = 9, r = 7.0
+            var aEnd = -1.257          // -72 degrees: just right of the top
+            var aStart = aEnd - 5.03   // 288 degrees of ring
+            ctx.beginPath()
+            ctx.arc(cx, cy, r, aStart, aEnd, false)
+            ctx.stroke()
 
-                // Head as a filled triangle sitting on the ring's end, along
-                // the tangent, so it reads as an arrow rather than a blob.
-                var tx = -Math.sin(aEnd), ty = Math.cos(aEnd)
-                var nx = -ty, ny = tx
-                var px = cx + r * Math.cos(aEnd), py = cy + r * Math.sin(aEnd)
-                ctx.beginPath()
-                ctx.moveTo(px + tx * 4.0, py + ty * 4.0)
-                ctx.lineTo(px - tx * 0.6 + nx * 2.6, py - ty * 0.6 + ny * 2.6)
-                ctx.lineTo(px - tx * 0.6 - nx * 2.6, py - ty * 0.6 - ny * 2.6)
-                ctx.closePath()
-                ctx.fill()
-            } else if (ctl.glyph === "play") {
-                ctx.beginPath()
-                ctx.moveTo(5.6, 4.0)
-                ctx.lineTo(14.0, 9.0)
-                ctx.lineTo(5.6, 14.0)
-                ctx.closePath()
-                ctx.fill()
-            } else if (ctl.glyph === "stop") {
-                ctx.beginPath()
-                ctx.rect(5.0, 5.0, 8.0, 8.0)
-                ctx.fill()
-            } else if (ctl.glyph === "close") {
-                ctx.beginPath()
-                ctx.moveTo(5.2, 5.2)
-                ctx.lineTo(12.8, 12.8)
-                ctx.moveTo(12.8, 5.2)
-                ctx.lineTo(5.2, 12.8)
-                ctx.stroke()
-            }
+            // Head as a filled triangle sitting on the ring's end, along the
+            // tangent, so it reads as an arrow rather than a blob.
+            var tx = -Math.sin(aEnd), ty = Math.cos(aEnd)
+            var nx = -ty, ny = tx
+            var px = cx + r * Math.cos(aEnd), py = cy + r * Math.sin(aEnd)
+            ctx.beginPath()
+            ctx.moveTo(px + tx * 3.2, py + ty * 3.2)
+            ctx.lineTo(px - tx * 0.5 + nx * 2.0, py - ty * 0.5 + ny * 2.0)
+            ctx.lineTo(px - tx * 0.5 - nx * 2.0, py - ty * 0.5 - ny * 2.0)
+            ctx.closePath()
+            ctx.fill()
         }
     }
 

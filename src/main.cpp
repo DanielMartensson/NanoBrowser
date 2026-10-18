@@ -4,7 +4,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
-#include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -258,20 +257,19 @@ static void preferVulkanCapablePlatform()
 }
 
 // ---------------------------------------------------------------------------
-// Playing YouTube videos with the hardware video decoder
+// Finding the sound server
 // ---------------------------------------------------------------------------
 //
-// Whether a PulseAudio/PipeWire socket could be pointed at (see below). The
-// hardware player builds its pipeline from this: without a sound server the
-// audio branch is left out instead of letting pulsesink fail the whole
-// pipeline and take the picture with it.
+// Whether a PulseAudio/PipeWire socket could be pointed at (see below). Qt
+// WebEngine sends the audio of the pages here, so the socket has to be found
+// before the first page starts playing.
 static bool g_soundServerAvailable = false;
 
 // The sound server is not where libpulse looks by default on this image:
 // weston.service hands the session an XDG_RUNTIME_DIR of /home/weston, while
-// PipeWire keeps its socket in /run/user/<uid>/pulse/native. GStreamer inherits
-// this process' environment, so it is enough to point PULSE_SERVER at a socket
-// that really exists:
+// PipeWire keeps its socket in /run/user/<uid>/pulse/native. Qt WebEngine
+// inherits this process' environment, so it is enough to point PULSE_SERVER at
+// a socket that really exists:
 //   * the socket in XDG_RUNTIME_DIR, when it is ours and really a socket;
 //   * otherwise our own /run/user/<uid>/pulse/native (the normal case when the
 //     browser is started with the wrong runtime directory);
@@ -317,275 +315,11 @@ static bool prepareSoundServer()
 }
 
 // The VPU of the STM32MP25 is a *stateless* V4L2 decoder (Hantro, /dev/video5)
-// for H.264 and VP8. This BSP has no VA-API at all, and Chromium does not
-// implement the stateless V4L2 API, so Qt WebEngine can never decode video in
-// hardware here - its <video> element always runs on the CPU. The way to play a
-// YouTube video on the VPU is GStreamer (v4l2slh264dec), fed with the H.264
-// variant of the stream.
-//
-// Nothing is downloaded: yt-dlp is asked for the direct stream URLs (H.264
-// video and AAC audio, DASH) and GStreamer streams them from YouTube's servers.
-// Video and audio are decoded inside a single pipeline, so they share the
-// pipeline clock (PipeWire's GstPulseSinkClock) and stay in sync.
-//
-// waylandsink is used on purpose: qml6glsink renders through Qt's OpenGL
-// context, which does not exist when Qt Quick composites on the Vulkan RHI. The
-// video therefore gets its own Wayland surface, which Weston composites
-// together with the (Vulkan-rendered) browser window.
-class HardwarePlayer : public QObject
-{
-    Q_OBJECT
-    Q_PROPERTY(bool available READ available CONSTANT)
-    Q_PROPERTY(bool playing READ playing NOTIFY changed)
-    Q_PROPERTY(QString status READ status NOTIFY changed)
-    Q_PROPERTY(QString title READ title NOTIFY changed)
-
-public:
-    explicit HardwarePlayer(QObject *parent = nullptr)
-        : QObject(parent)
-    {
-        m_ytDlp = QStandardPaths::findExecutable(QStringLiteral("yt-dlp"));
-        m_gstLaunch = QStandardPaths::findExecutable(QStringLiteral("gst-launch-1.0"));
-        m_available = !m_ytDlp.isEmpty()
-            && !m_gstLaunch.isEmpty()
-            && QFile::exists(QStringLiteral("/dev/video5")); // the VPU's stateless H.264 decoder
-    }
-
-    bool available() const { return m_available; }
-    bool playing() const { return m_play && m_play->state() != QProcess::NotRunning; }
-    QString status() const { return m_status; }
-    QString title() const { return m_title; }
-
-    Q_INVOKABLE void play(const QString &pageUrl)
-    {
-        if (!m_available) {
-            emit failed(QStringLiteral("Hardware playback unavailable: yt-dlp, gst-launch-1.0 or /dev/video5 is missing"));
-            return;
-        }
-
-        stop();
-        m_status = QStringLiteral("Resolving the H.264 stream (yt-dlp) ...");
-        emit changed();
-        qInfo("NanoBrowser: hardware player: resolving %s", pageUrl.toUtf8().constData());
-
-        if (!m_resolve) {
-            m_resolve = new QProcess(this);
-            m_resolve->setProcessChannelMode(QProcess::MergedChannels);
-            connect(m_resolve, &QProcess::finished, this, &HardwarePlayer::resolveFinished);
-            connect(m_resolve, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
-                if (!m_status.isEmpty()) {
-                    m_status.clear();
-                    emit changed();
-                }
-                emit failed(QStringLiteral("Could not run yt-dlp"));
-            });
-        }
-        if (m_resolve->state() != QProcess::NotRunning) {
-            m_resolve->kill();
-            m_resolve->waitForFinished(1000);
-        }
-        m_resolve->start(m_ytDlp, resolveArguments(pageUrl));
-    }
-
-    Q_INVOKABLE void stop()
-    {
-        stopProcess(m_resolve);
-        stopProcess(m_play);
-        stopProcess(m_audio);
-        if (!m_status.isEmpty() || !m_title.isEmpty()) {
-            m_status.clear();
-            m_title.clear();
-            emit changed();
-        }
-    }
-
-signals:
-    void changed();
-    void failed(const QString &reason);
-
-private:
-    static QStringList resolveArguments(const QString &pageUrl)
-    {
-        // H.264 is the only codec YouTube offers that this VPU decodes (no VP9
-        // and no HEVC), and AAC keeps the audio side simple. Cap at 1080p: that
-        // is what the stateless decoder is specified for here.
-        static const QString format = QStringLiteral(
-            "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]"
-            "/bv*[vcodec^=avc1][height<=1080]+ba"
-            "/b[ext=mp4][vcodec^=avc1]"
-            "/b[ext=mp4]");
-
-        // yt-dlp prints the title (-e) first and then one URL (-g) per selected
-        // stream: video first, then audio.
-        return { QStringLiteral("--no-warnings"), QStringLiteral("--no-playlist"),
-                 QStringLiteral("--socket-timeout"), QStringLiteral("15"),
-                 QStringLiteral("-e"), QStringLiteral("-g"),
-                 QStringLiteral("-f"), format, pageUrl };
-    }
-
-    static QString sink()
-    {
-        if (!qgetenv("WAYLAND_DISPLAY").isEmpty() || !qgetenv("WAYLAND_SOCKET").isEmpty())
-            return QStringLiteral("waylandsink");
-        return QStringLiteral("autovideosink");
-    }
-
-    static QString gstreamerLogPath()
-    {
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (!QDir(dir).exists())
-            QDir().mkpath(dir);
-        return dir + QStringLiteral("/gstreamer.log");
-    }
-
-    static QString gstreamerAudioLogPath()
-    {
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (!QDir(dir).exists())
-            QDir().mkpath(dir);
-        return dir + QStringLiteral("/gstreamer-audio.log");
-    }
-
-    // gst-launch treats every argument as one token: giving it the whole
-    // pipeline as a single argument fails with "erroneous pipeline: syntax
-    // error" (seen with GStreamer 1.22.12 on the board), while the same text
-    // split into words is accepted. The pipelines here have no spaces inside a
-    // value - the stream URLs are percent-encoded - so splitting is exact.
-    static QStringList arguments(const QString &pipeline)
-    {
-        QStringList args{ QStringLiteral("-q") };
-        args << pipeline.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-        return args;
-    }
-
-    static void stopProcess(QProcess *process)
-    {
-        if (!process || process->state() == QProcess::NotRunning)
-            return;
-        // gst-launch treats SIGTERM as a clean shutdown.
-        process->terminate();
-        if (!process->waitForFinished(1500))
-            process->kill();
-    }
-
-    void resolveFinished(int exitCode, QProcess::ExitStatus exitStatus)
-    {
-        const QString output = QString::fromUtf8(m_resolve->readAll()).trimmed();
-        if (exitStatus != QProcess::NormalExit || exitCode != 0 || output.isEmpty()) {
-            qInfo("NanoBrowser: hardware player: yt-dlp failed (exit status %d, code %d, "
-                  "%d bytes of output)", static_cast<int>(exitStatus), exitCode, output.size());
-            if (!output.isEmpty())
-                qInfo("NanoBrowser: yt-dlp said: %s", output.toUtf8().constData());
-            m_status.clear();
-            emit changed();
-            emit failed(QStringLiteral("yt-dlp could not resolve this page"));
-            return;
-        }
-
-        QStringList urls;
-        const QStringList lines = output.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        for (const QString &raw : lines) {
-            const QString line = raw.trimmed();
-            if (line.startsWith(QLatin1String("http")))
-                urls.append(line);
-            else if (m_title.isEmpty())
-                m_title = line;
-        }
-        if (urls.isEmpty()) {
-            qInfo("NanoBrowser: hardware player: no stream URL in yt-dlp's answer: %s",
-                  output.toUtf8().constData());
-            m_status.clear();
-            emit changed();
-            emit failed(QStringLiteral("No playable H.264 stream found"));
-            return;
-        }
-        qInfo("NanoBrowser: hardware player: resolved \"%s\", %d stream URL(s)",
-              m_title.toUtf8().constData(), int(urls.size()));
-        emit changed();
-        startPipeline(urls.value(0), urls.value(1));
-    }
-
-    void startPipeline(const QString &videoUrl, const QString &audioUrl)
-    {
-        // Without a reachable sound server, pulsesink fails and takes whatever
-        // else shares its pipeline down with it, so leave the audio out.
-        const QString muxedAudio = g_soundServerAvailable
-            ? QStringLiteral(" d.audio_0 ! queue ! aacparse ! avdec_aac "
-                             "! audioconvert ! audioresample ! pulsesink")
-            : QString();
-
-        QString video;
-        if (audioUrl.isEmpty()) {
-            // Muxed stream: qtdemux splits video and audio dynamically.
-            video = QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux name=d "
-                                   "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2%3")
-                        .arg(videoUrl, sink(), muxedAudio);
-        } else {
-            video = QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! h264parse ! v4l2slh264dec ! queue ! %2")
-                        .arg(videoUrl, sink());
-        }
-
-        // A fresh QProcess for every video, so that a finished() signal from the
-        // process being replaced cannot be taken for this one ending.
-        stopProcess(m_play);
-        if (m_play)
-            m_play->deleteLater();
-        m_play = new QProcess(this);
-        m_play->setProcessChannelMode(QProcess::MergedChannels);
-        m_play->setStandardOutputFile(gstreamerLogPath());
-        connect(m_play, &QProcess::finished, this, &HardwarePlayer::playbackFinished);
-        m_play->start(m_gstLaunch, arguments(video));
-
-        // The audio gets its own gst-launch. This image has no opus decoder, and
-        // YouTube sometimes hands out the audio as webm/opus; in one pipeline
-        // that error ends the video as well, in its own one it only costs the
-        // sound. decodebin is used instead of qtdemux because it takes the m4a
-        // and the webm the site offers alike.
-        if (!audioUrl.isEmpty() && g_soundServerAvailable) {
-            stopProcess(m_audio);
-            if (m_audio)
-                m_audio->deleteLater();
-            m_audio = new QProcess(this);
-            m_audio->setProcessChannelMode(QProcess::MergedChannels);
-            m_audio->setStandardOutputFile(gstreamerAudioLogPath());
-            connect(m_audio, &QProcess::finished, this, [] {
-                qInfo("NanoBrowser: hardware player: audio pipeline stopped");
-            });
-            m_audio->start(m_gstLaunch, arguments(
-                QStringLiteral("souphttpsrc location=\"%1\" ! decodebin "
-                               "! audioconvert ! audioresample ! pulsesink").arg(audioUrl)));
-        }
-
-        qInfo("NanoBrowser: hardware player: gst-launch-1.0 started (%s), video log: %s",
-              g_soundServerAvailable ? "video + audio" : "video only, no sound server",
-              gstreamerLogPath().toUtf8().constData());
-        m_status = g_soundServerAvailable
-            ? QStringLiteral("Hardware decoding: v4l2slh264dec (VPU) + audio")
-            : QStringLiteral("Hardware decoding: v4l2slh264dec (VPU), video only - no sound server");
-        emit changed();
-    }
-
-    void playbackFinished()
-    {
-        // Only when it is the player this object currently owns: the process it
-        // replaced also reports finished, and so does one that was just stopped.
-        if (sender() != m_play)
-            return;
-        stopProcess(m_audio);
-        m_status.clear();
-        m_title.clear();
-        emit changed();
-    }
-
-    QString m_ytDlp;
-    QString m_gstLaunch;
-    bool m_available = false;
-    QString m_status;
-    QString m_title;
-    QProcess *m_resolve = nullptr;
-    QProcess *m_play = nullptr;
-    QProcess *m_audio = nullptr;
-};
+// for H.264 and VP8. This BSP has no VA-API, and Chromium does not implement the
+// stateless V4L2 API, so Qt WebEngine cannot decode video in hardware here: its
+// <video> elements always decode on the CPU. Playing something on the VPU is
+// YtGst's job, and the browser deliberately knows nothing about yt-dlp or
+// GStreamer.
 
 int main(int argc, char *argv[])
 {
@@ -609,10 +343,9 @@ int main(int argc, char *argv[])
 
     pickGraphicsApi();
 
-    // The hardware player hands this process' environment to gst-launch-1.0, so
-    // the sound server has to be found before the first pipeline starts. Note
-    // that this Qt build drops qWarning() output, which is why the result is
-    // reported with qInfo() and shown in the player's status line instead.
+    // Qt WebEngine's audio goes to the sound server, so point PULSE_SERVER at a
+    // socket that exists before the first page plays. Note that this Qt build
+    // drops qWarning() output, which is why the result is reported with qInfo().
     g_soundServerAvailable = prepareSoundServer();
     const QByteArray pulseServer = qgetenv("PULSE_SERVER");
     qInfo("NanoBrowser: sound server: %s", !g_soundServerAvailable ? "not found"
@@ -637,7 +370,8 @@ int main(int argc, char *argv[])
     // aborts with "Unable to extract file descriptor out of external VkImage".
     // "raster" keeps the GPU process (GPU rasterisation, working WebGL) and only
     // composites in software, which is the part that must not go through Vulkan.
-    // Video is decoded by the VPU in either case, see HardwarePlayer.
+    // Video in <video> elements is decoded on the CPU here either way; see the
+    // note above about the stateless VPU and YtGst.
     // How far Chromium is allowed to use the GPU is decided separately from the
     // renderer Qt Quick uses:
     //   full   - GPU rasterisation and zero-copy textures; needs a GL context
@@ -677,13 +411,6 @@ int main(int argc, char *argv[])
     qInfo("NanoBrowser: Chromium GPU mode '%s', flags: %s",
           gpuMode.toUtf8().constData(), extraFlags.constData());
 
-    // Video pages are handed to the VPU on their own; NANOBROWSER_AUTO_VPU=0
-    // leaves that to the F8 shortcut for anyone who wants to drive it by hand.
-    const QByteArray autoVpu = qgetenv("NANOBROWSER_AUTO_VPU");
-    const bool hardwareAutoStart = autoVpu != QLatin1String("0");
-    qInfo("NanoBrowser: VPU handover: %s", hardwareAutoStart
-          ? "automatic on video pages" : "F8 only (NANOBROWSER_AUTO_VPU=0)");
-
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     QtWebEngineQuick::initialize();
 #endif
@@ -694,10 +421,6 @@ int main(int argc, char *argv[])
         + QStringLiteral("/QtWebEngine/nanobrowser"));
     profile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
 
-    // Declared before the engine so that it outlives it (enables hardware
-    // playback of YouTube videos from QML).
-    HardwarePlayer hardwarePlayer;
-
     QQmlApplicationEngine engine;
     // Target Qt: no QQmlEngine::addContextProperty(); context properties go
     // through the root context instead.
@@ -705,8 +428,6 @@ int main(int argc, char *argv[])
     if (context) {
         context->setContextProperty("graphicsApi", g_graphicsApi);
         context->setContextProperty("graphicsReason", g_graphicsReason);
-        context->setContextProperty("hardwareAutoStart", hardwareAutoStart);
-        context->setContextProperty("hardwarePlayer", &hardwarePlayer);
     }
 
     engine.loadFromModule("NanoBrowser", "Main");
