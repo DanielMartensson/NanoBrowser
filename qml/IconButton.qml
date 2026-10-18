@@ -44,6 +44,7 @@ Button {
         width: 18
         height: 18
         anchors.centerIn: parent
+        antialiasing: true
 
         Connections {
             target: ctl
@@ -56,27 +57,30 @@ Button {
             ctx.reset()
             ctx.strokeStyle = ctl.iconColor
             ctx.fillStyle = ctl.iconColor
-            ctx.lineWidth = 1.8
+            ctx.lineWidth = 2.0
             ctx.lineCap = "round"
             ctx.lineJoin = "round"
 
             if (ctl.glyph === "reload") {
-                // A ring with a gap at the top right, and the arrow head on the
-                // gap's lower end so that it points the way the ring runs.
-                var cx = 9, cy = 9, r = 5.9
-                var a0 = -Math.PI / 2 - 0.55
-                var a1 = -Math.PI / 2 + 0.55
+                // The circular arrow browsers use for reload: a ring with a gap
+                // at the top right and an arrow head at the top of the ring,
+                // pointing the way the ring runs (clockwise).
+                var cx = 9, cy = 9, r = 6.4
+                var aEnd = -1.257          // -72 degrees: just right of the top
+                var aStart = aEnd - 5.03   // 288 degrees of ring
                 ctx.beginPath()
-                ctx.arc(cx, cy, r, a0, a1 + 2 * Math.PI, false)
+                ctx.arc(cx, cy, r, aStart, aEnd, false)
                 ctx.stroke()
 
-                var tx = -Math.sin(a1), ty = Math.cos(a1)
+                // Head as a filled triangle sitting on the ring's end, along
+                // the tangent, so it reads as an arrow rather than a blob.
+                var tx = -Math.sin(aEnd), ty = Math.cos(aEnd)
                 var nx = -ty, ny = tx
-                var px = cx + r * Math.cos(a1), py = cy + r * Math.sin(a1)
+                var px = cx + r * Math.cos(aEnd), py = cy + r * Math.sin(aEnd)
                 ctx.beginPath()
-                ctx.moveTo(px + tx * 3.0, py + ty * 3.0)
-                ctx.lineTo(px - tx * 0.4 + nx * 2.6, py - ty * 0.4 + ny * 2.6)
-                ctx.lineTo(px - tx * 0.4 - nx * 2.6, py - ty * 0.4 - ny * 2.6)
+                ctx.moveTo(px + tx * 4.0, py + ty * 4.0)
+                ctx.lineTo(px - tx * 0.6 + nx * 2.6, py - ty * 0.6 + ny * 2.6)
+                ctx.lineTo(px - tx * 0.6 - nx * 2.6, py - ty * 0.6 - ny * 2.6)
                 ctx.closePath()
                 ctx.fill()
             } else if (ctl.glyph === "play") {
