@@ -25,6 +25,7 @@ ApplicationWindow {
     }
 
     readonly property bool isFullscreen: window.visibility === Window.FullScreen
+    readonly property bool isMaximized: window.visibility === Window.Maximized
     property bool edgeHover: false
     property int barHeight: 62
 
@@ -82,6 +83,17 @@ ApplicationWindow {
         window.visibility = window.isFullscreen ? Window.Windowed : Window.FullScreen
     }
 
+    // Maximize is xdg_toplevel.set_maximized, which Weston's desktop shell
+    // implements itself (desktop-shell/shell.c: set_maximized_position() and the
+    // maximize_binding on Super+Shift+M). It is not fullscreen: the compositor
+    // keeps the panel and the other windows in view.
+    function toggleMaximized() {
+        if (window.isMaximized)
+            window.showNormal()
+        else
+            window.showMaximized()
+    }
+
     onVisibilityChanged: {
         if (window.visibility !== Window.FullScreen)
             window.edgeHover = false
@@ -112,6 +124,10 @@ ApplicationWindow {
     // shell binds to Super+Tab (binding_modifier defaults to Super, see
     // desktop-shell/shell.c: switcher_next() puts the minimized views in the list
     // and switcher_destroy() restores the ones that were not picked).
+    //
+    // The three buttons draw their icons instead of using font glyphs: the
+    // Liberation fonts on this image have no U+2715 (the close cross came out as
+    // an empty square) and no U+25A1 for a maximize frame.
     Rectangle {
         id: titleBar
         anchors { top: parent.top; left: parent.left; right: parent.right }
@@ -144,32 +160,39 @@ ApplicationWindow {
             elide: Text.ElideRight
         }
 
-        NavButton {
+        WindowButton {
             id: minimizeButton
+            anchors {
+                right: maximizeButton.left
+                rightMargin: 4
+                verticalCenter: parent.verticalCenter
+            }
+            kind: "minimize"
+            tip: "Minimize NanoBrowser (Super+Tab brings it back)"
+            onClicked: window.showMinimized()
+        }
+
+        WindowButton {
+            id: maximizeButton
             anchors {
                 right: closeButton.left
                 rightMargin: 4
                 verticalCenter: parent.verticalCenter
             }
-            width: 30
-            height: 22
-            font.pixelSize: 15
-            text: "\u2013"
-            tip: "Minimize NanoBrowser (Super+Tab brings it back)"
-            onClicked: window.showMinimized()
+            kind: window.isMaximized ? "restore" : "maximize"
+            tip: window.isMaximized ? "Restore NanoBrowser (Super+Shift+M)"
+                                   : "Maximize NanoBrowser (Super+Shift+M)"
+            onClicked: window.toggleMaximized()
         }
 
-        NavButton {
+        WindowButton {
             id: closeButton
             anchors {
                 right: parent.right
                 rightMargin: 6
                 verticalCenter: parent.verticalCenter
             }
-            width: 30
-            height: 22
-            font.pixelSize: 13
-            text: "\u2715"
+            kind: "close"
             tip: "Close NanoBrowser"
             onClicked: window.close()
         }
@@ -401,8 +424,8 @@ ApplicationWindow {
                 }
             }
 
-            NavButton {
-                text: "\u25A0"
+            IconButton {
+                icon: "stop"
                 tip: "Stop hardware playback"
                 onClicked: hardwarePlayer.stop()
             }
@@ -444,14 +467,14 @@ ApplicationWindow {
                 text: "YouTube video \u2014 play it with the hardware decoder (VPU, H.264)"
             }
 
-            NavButton {
-                text: "\u25B6"
+            IconButton {
+                icon: "play"
                 tip: "Play with the VPU"
                 onClicked: window.playWithHardware()
             }
 
-            NavButton {
-                text: "\u2715"
+            IconButton {
+                icon: "close"
                 tip: "Not now"
                 onClicked: window.youtubeOffer = false
             }

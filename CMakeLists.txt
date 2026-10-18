@@ -22,8 +22,10 @@ qt_add_qml_module(NanoBrowser
     VERSION 1.0
     QML_FILES
         qml/FullscreenButton.qml
+        qml/IconButton.qml
         qml/Main.qml
         qml/NavButton.qml
+        qml/WindowButton.qml
 )
 
 set_target_properties(NanoBrowser PROPERTIES
