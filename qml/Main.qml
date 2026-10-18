@@ -102,9 +102,16 @@ ApplicationWindow {
 
     // Weston's desktop shell on this image has no xdg-decoration support, and Qt 6
     // cannot ask for server-side decorations either, so the window draws its own
-    // slim title bar. Without it the window could not be moved or closed at all:
-    // dragging the bar asks the compositor for an interactive move
+    // slim title bar. Without it the window could not be moved, minimized or
+    // closed at all: dragging the bar asks the compositor for an interactive move
     // (xdg_toplevel.move), which is what CSD clients do everywhere.
+    //
+    // Minimize is xdg_toplevel.set_minimized, which Weston's desktop shell
+    // implements by moving the view into its minimized layer - a hidden window,
+    // not a stopped one. It comes back with the compositor's switcher, which the
+    // shell binds to Super+Tab (binding_modifier defaults to Super, see
+    // desktop-shell/shell.c: switcher_next() puts the minimized views in the list
+    // and switcher_destroy() restores the ones that were not picked).
     Rectangle {
         id: titleBar
         anchors { top: parent.top; left: parent.left; right: parent.right }
@@ -127,7 +134,7 @@ ApplicationWindow {
             anchors {
                 left: parent.left
                 leftMargin: 12
-                right: closeButton.left
+                right: minimizeButton.left
                 rightMargin: 10
                 verticalCenter: parent.verticalCenter
             }
@@ -135,6 +142,21 @@ ApplicationWindow {
             color: "#98A1B3"
             font.pixelSize: 12
             elide: Text.ElideRight
+        }
+
+        NavButton {
+            id: minimizeButton
+            anchors {
+                right: closeButton.left
+                rightMargin: 4
+                verticalCenter: parent.verticalCenter
+            }
+            width: 30
+            height: 22
+            font.pixelSize: 15
+            text: "\u2013"
+            tip: "Minimize NanoBrowser (Super+Tab brings it back)"
+            onClicked: window.showMinimized()
         }
 
         NavButton {
