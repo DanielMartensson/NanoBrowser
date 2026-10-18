@@ -389,16 +389,9 @@ public:
 
     Q_INVOKABLE void stop()
     {
-        if (m_resolve && m_resolve->state() != QProcess::NotRunning) {
-            m_resolve->kill();
-            m_resolve->waitForFinished(1000);
-        }
-        if (m_play && m_play->state() != QProcess::NotRunning) {
-            // gst-launch treats SIGTERM as a clean shutdown.
-            m_play->terminate();
-            if (!m_play->waitForFinished(1500))
-                m_play->kill();
-        }
+        stopProcess(m_resolve);
+        stopProcess(m_play);
+        stopProcess(m_audio);
         if (!m_status.isEmpty() || !m_title.isEmpty()) {
             m_status.clear();
             m_title.clear();
@@ -445,6 +438,36 @@ private:
         return dir + QStringLiteral("/gstreamer.log");
     }
 
+    static QString gstreamerAudioLogPath()
+    {
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (!QDir(dir).exists())
+            QDir().mkpath(dir);
+        return dir + QStringLiteral("/gstreamer-audio.log");
+    }
+
+    // gst-launch treats every argument as one token: giving it the whole
+    // pipeline as a single argument fails with "erroneous pipeline: syntax
+    // error" (seen with GStreamer 1.22.12 on the board), while the same text
+    // split into words is accepted. The pipelines here have no spaces inside a
+    // value - the stream URLs are percent-encoded - so splitting is exact.
+    static QStringList arguments(const QString &pipeline)
+    {
+        QStringList args{ QStringLiteral("-q") };
+        args << pipeline.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        return args;
+    }
+
+    static void stopProcess(QProcess *process)
+    {
+        if (!process || process->state() == QProcess::NotRunning)
+            return;
+        // gst-launch treats SIGTERM as a clean shutdown.
+        process->terminate();
+        if (!process->waitForFinished(1500))
+            process->kill();
+    }
+
     void resolveFinished(int exitCode, QProcess::ExitStatus exitStatus)
     {
         const QString output = QString::fromUtf8(m_resolve->readAll()).trimmed();
@@ -484,60 +507,71 @@ private:
 
     void startPipeline(const QString &videoUrl, const QString &audioUrl)
     {
-        QStringList pipelines;
-        // Without a reachable sound server, pulsesink fails and takes the rest
-        // of the pipeline (the picture) down with it, so leave the audio out.
+        // Without a reachable sound server, pulsesink fails and takes whatever
+        // else shares its pipeline down with it, so leave the audio out.
         const QString muxedAudio = g_soundServerAvailable
             ? QStringLiteral(" d.audio_0 ! queue ! aacparse ! avdec_aac "
                              "! audioconvert ! audioresample ! pulsesink")
             : QString();
 
+        QString video;
         if (audioUrl.isEmpty()) {
             // Muxed stream: qtdemux splits video and audio dynamically.
-            pipelines << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux name=d "
-                                        "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2%3")
-                             .arg(videoUrl, sink(), muxedAudio);
+            video = QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux name=d "
+                                   "d.video_0 ! queue ! h264parse ! v4l2slh264dec ! queue ! %2%3")
+                        .arg(videoUrl, sink(), muxedAudio);
         } else {
-            pipelines << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! h264parse ! v4l2slh264dec ! queue ! %2")
-                             .arg(videoUrl, sink());
-            if (g_soundServerAvailable)
-                pipelines << QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! queue ! aacparse ! avdec_aac "
-                                            "! audioconvert ! audioresample ! pulsesink")
-                                 .arg(audioUrl);
+            video = QStringLiteral("souphttpsrc location=\"%1\" ! qtdemux ! h264parse ! v4l2slh264dec ! queue ! %2")
+                        .arg(videoUrl, sink());
         }
 
-        // gst-launch treats every argument as one token: giving it the whole
-        // pipeline as a single argument fails with "erroneous pipeline: syntax
-        // error" (seen with GStreamer 1.22.12 on the board), while the same
-        // text split into words is accepted. The pipelines above have no spaces
-        // inside a value - the stream URLs are percent-encoded - so splitting
-        // on spaces is exact.
-        QStringList args{ QStringLiteral("-q") };
-        for (const QString &pipeline : pipelines)
-            args << pipeline.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        // A fresh QProcess for every video, so that a finished() signal from the
+        // process being replaced cannot be taken for this one ending.
+        stopProcess(m_play);
+        if (m_play)
+            m_play->deleteLater();
+        m_play = new QProcess(this);
+        m_play->setProcessChannelMode(QProcess::MergedChannels);
+        m_play->setStandardOutputFile(gstreamerLogPath());
+        connect(m_play, &QProcess::finished, this, &HardwarePlayer::playbackFinished);
+        m_play->start(m_gstLaunch, arguments(video));
 
-        if (!m_play) {
-            m_play = new QProcess(this);
-            m_play->setProcessChannelMode(QProcess::MergedChannels);
-            m_play->setStandardOutputFile(gstreamerLogPath());
-            connect(m_play, &QProcess::finished, this, &HardwarePlayer::playbackFinished);
+        // The audio gets its own gst-launch. This image has no opus decoder, and
+        // YouTube sometimes hands out the audio as webm/opus; in one pipeline
+        // that error ends the video as well, in its own one it only costs the
+        // sound. decodebin is used instead of qtdemux because it takes the m4a
+        // and the webm the site offers alike.
+        if (!audioUrl.isEmpty() && g_soundServerAvailable) {
+            stopProcess(m_audio);
+            if (m_audio)
+                m_audio->deleteLater();
+            m_audio = new QProcess(this);
+            m_audio->setProcessChannelMode(QProcess::MergedChannels);
+            m_audio->setStandardOutputFile(gstreamerAudioLogPath());
+            connect(m_audio, &QProcess::finished, this, [] {
+                qInfo("NanoBrowser: hardware player: audio pipeline stopped");
+            });
+            m_audio->start(m_gstLaunch, arguments(
+                QStringLiteral("souphttpsrc location=\"%1\" ! decodebin "
+                               "! audioconvert ! audioresample ! pulsesink").arg(audioUrl)));
         }
-        if (m_play->state() != QProcess::NotRunning) {
-            m_play->kill();
-            m_play->waitForFinished(1000);
-        }
-        m_play->start(m_gstLaunch, args);
-        qInfo("NanoBrowser: hardware player: gst-launch-1.0 started (%s), log: %s",
+
+        qInfo("NanoBrowser: hardware player: gst-launch-1.0 started (%s), video log: %s",
               g_soundServerAvailable ? "video + audio" : "video only, no sound server",
               gstreamerLogPath().toUtf8().constData());
         m_status = g_soundServerAvailable
-            ? QStringLiteral("Hardware decoding: v4l2slh264dec (VPU) + AAC audio")
+            ? QStringLiteral("Hardware decoding: v4l2slh264dec (VPU) + audio")
             : QStringLiteral("Hardware decoding: v4l2slh264dec (VPU), video only - no sound server");
         emit changed();
     }
 
     void playbackFinished()
     {
+        // Only when it is the player this object currently owns: the process it
+        // replaced also reports finished, and so does one that was just stopped.
+        if (sender() != m_play)
+            return;
+        stopProcess(m_audio);
         m_status.clear();
         m_title.clear();
         emit changed();
@@ -550,6 +584,7 @@ private:
     QString m_title;
     QProcess *m_resolve = nullptr;
     QProcess *m_play = nullptr;
+    QProcess *m_audio = nullptr;
 };
 
 int main(int argc, char *argv[])
