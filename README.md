@@ -156,6 +156,35 @@ main thread busy for thirteen seconds after the first byte (DOMContentLoaded at
 13.7 s), and it keeps producing work afterwards, which is the 1 fps. Nothing in
 the browser can change that: the page is the load.
 
+### Speedometer 2.1, and what the GPU is doing
+
+[Speedometer 2.1](https://browserbench.org/Speedometer2.1/) is the page the
+project suggests for comparing browsers: JavaScript, DOM and layout, no WebGL,
+so it says how much work the GPU can take away even when nothing is 3D. It was
+run in a 1000x780 window - the page asks for a viewport of at least 850x650,
+the normal window is 1000x640 - and takes thirteen minutes per run on this
+board.
+
+| configuration | Speedometer 2.1 | WebGL 2.0 |
+| --- | --- | --- |
+| `NANOBROWSER_CHROMIUM_GPU=full` (the default) | 9.33 | hardware, `Vivante GCNANOULTRA31_VIP2` |
+| `NANOBROWSER_CHROMIUM_GPU=off` | 9.20 | none |
+
+The two scores differ by less than a run: the benchmark is limited by the two
+Cortex-A35 cores, not by rasterisation, so doing that work on the CPU does not
+make it slower either. What the GPU does decide is what a page can do at all.
+With the default mode a WebGL context reports
+
+```
+WebGL 2.0 (OpenGL ES 3.0 Chromium), renderer "Vivante GCNANOULTRA31_VIP2"
+```
+
+and `chrome://gpu` lists Canvas, Compositing, Rasterization, Video Decode,
+WebGL and WebGL2 as *Hardware accelerated* (Vulkan and WebGPU are disabled, as
+they should be here). With `GPU=off` there is no WebGL at all: Chromium starts
+with `--disable-gpu`, and `--enable-unsafe-swiftshader` does not bring a
+software fallback back.
+
 What was measured and rejected, so it does not get tried again:
 
 | change | result |
