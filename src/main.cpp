@@ -9,7 +9,6 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QVulkanInstance>
-#include <QtWebEngineCore/QWebEngineProfile>
 #include <QtWebEngineQuick>
 #include <QUrl>
 #include <QDebug>
@@ -18,6 +17,8 @@
 #include <QVersionNumber>
 #include <QtGlobal>
 #include <clocale>
+#include <cstdio>
+#include <cstdlib>
 #include <langinfo.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -32,8 +33,66 @@
 
 static QtMessageHandler g_previousMessageHandler = nullptr;
 
+// Reached from QML when the window is closed (X, Alt+F4, NANOBROWSER_EXIT_AFTER):
+// the page has been given a moment to idle, and then the process goes. QtWebEngine
+// tears Chromium down from QCoreApplication::aboutToQuit, and that teardown is
+// exactly where libwayland reports the window queue it destroys with buffer
+// releases still attached. The session is over by then - the page is idle, the
+// cache has been written - so step out before that teardown runs.
+class Session : public QObject
+{
+    Q_OBJECT
+public:
+    using QObject::QObject;
+
+    Q_INVOKABLE void closeNow()
+    {
+        std::fflush(nullptr);
+        std::_Exit(0);
+    }
+};
+
 static QString g_graphicsApi = QStringLiteral("OpenGL");
 static QString g_graphicsReason = {};
+// True only when Vulkan was wanted and could not be used. The banner in the
+// window is for that case; a deliberate OpenGL build has nothing to announce.
+static bool g_graphicsFallback = false;
+
+// The moment main() started, in milliseconds since the epoch. QML reports its
+// milestones against this, so "the page is up" can be measured from the outside
+// without a stopwatch in the launcher.
+static qint64 g_processStartMs = 0;
+
+static void printUsage(const char *program)
+{
+    std::printf(
+        "Usage: %s [--page URL]\n"
+        "\n"
+        "  --page URL    Open URL (or a bare host name) at startup\n"
+        "  --help        Show this text\n"
+        "  --version     Show the version\n"
+        "\n"
+        "Environment:\n"
+        "  NANOBROWSER_RENDERER=opengl|vulkan   Force the Qt Quick backend\n"
+        "  NANOBROWSER_CHROMIUM_GPU=full|raster|off\n"
+        "                                       How far Chromium may use the GPU\n"
+        "  NANOBROWSER_EXTRA_FLAGS=\"...\"      Extra Chromium switches\n"
+        "  NANOBROWSER_TIMING=1                 Print page load timings\n"
+        "  NANOBROWSER_EXIT_AFTER=SECONDS       Close the way the X button does\n",
+        program);
+}
+
+// "--page example.com" turns into https://example.com, exactly as the address
+// bar would have done it.
+static QString normaliseUrl(const QString &text)
+{
+    QString url = text.trimmed();
+    if (url.isEmpty())
+        return {};
+    if (!url.contains(QStringLiteral("://")))
+        url.prepend(QStringLiteral("https://"));
+    return url;
+}
 
 static void nanoBrowserMessageHandler(QtMsgType type, const QMessageLogContext &context,
                                       const QString &message)
@@ -173,25 +232,42 @@ static bool vulkanInstanceUsable(QVulkanInstance &instance)
     return supportedVersion >= VK_API_VERSION_1_2;
 }
 
+static void useOpenGL(const QString &reason, bool fallback)
+{
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
+    g_graphicsApi = QStringLiteral("OpenGL");
+    g_graphicsReason = reason;
+    g_graphicsFallback = fallback;
+    qInfo().noquote() << "NanoBrowser: using OpenGL renderer ("
+                      << (reason.isEmpty() ? QStringLiteral("chosen at build time") : reason)
+                      << ")";
+    appendGraphicsLog();
+}
+
 static void pickGraphicsApi()
 {
     const QByteArray forced = rendererFromEnv();
+    // What was asked for: the environment first, then the build (the board is
+    // built with opengl, a desktop build defaults to auto).
+    const QString wanted = forced.isEmpty()
+        ? QStringLiteral(NANOBROWSER_DEFAULT_RENDERER)
+        : QString::fromLatin1(forced);
 
-    if (forced == "opengl") {
-        QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
-        g_graphicsApi = QStringLiteral("OpenGL");
-        g_graphicsReason = QStringLiteral("forced via NANOBROWSER_RENDERER");
-        qInfo() << "NanoBrowser: using OpenGL renderer (forced)";
-        appendGraphicsLog();
+    if (wanted == QLatin1String("opengl")) {
+        // OpenGL gives Chromium and Qt Quick one shared GL context: Chromium
+        // rasterises on the GPU and hands the tiles over without a copy. On the
+        // STM32MP257F that is 2.3x faster to the first frame than the Vulkan
+        // backend (1.3 s against 3.1 s), YouTube loads in 14.9 s instead of
+        // 17.5 s, and the process exits with status 0 - the VeriSilicon driver
+        // does not survive the teardown of a window it rendered.
+        useOpenGL(forced.isEmpty()
+                      ? QStringLiteral("the build's choice")
+                      : QStringLiteral("forced via NANOBROWSER_RENDERER"), false);
         return;
     }
 
-    if (forced != "vulkan" && unstableVulkanIcdPresent()) {
-        QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
-        g_graphicsApi = QStringLiteral("OpenGL");
-        g_graphicsReason = QStringLiteral("unstable Vulkan drivers detected (nouveau/hasvk)");
-        qInfo() << "NanoBrowser: using OpenGL renderer (unstable Vulkan drivers detected)";
-        appendGraphicsLog();
+    if (wanted == QLatin1String("auto") && unstableVulkanIcdPresent()) {
+        useOpenGL(QStringLiteral("unstable Vulkan drivers detected (nouveau/hasvk)"), true);
         return;
     }
 
@@ -216,18 +292,17 @@ static void pickGraphicsApi()
                 ? QStringLiteral("no supported Vulkan GPU")
                 : QStringLiteral("Vulkan instance below 1.2 (ICD does not expose vkEnumerateInstanceVersion)");
 
-    if (forced != "vulkan" && !suitable) {
-        QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGLRhi);
-        g_graphicsApi = QStringLiteral("OpenGL");
-        g_graphicsReason = vulkanFallbackReason;
-        qInfo() << "NanoBrowser: using OpenGL renderer (" << vulkanFallbackReason << ")";
-        appendGraphicsLog();
+    if (!suitable) {
+        // Even an explicit NANOBROWSER_RENDERER=vulkan falls back: a Vulkan
+        // instance Qt cannot use would leave the window without a renderer.
+        useOpenGL(vulkanFallbackReason, true);
         return;
     }
 
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
     g_graphicsApi = QStringLiteral("Vulkan");
     g_graphicsReason.clear();
+    g_graphicsFallback = false;
     qInfo() << "NanoBrowser: using Vulkan renderer";
     appendGraphicsLog();
 }
@@ -358,6 +433,28 @@ static bool prepareSoundServer()
 
 int main(int argc, char *argv[])
 {
+    g_processStartMs = QDateTime::currentMSecsSinceEpoch();
+
+    // The one and only page argument. It is resolved before QGuiApplication so
+    // --help and --version work without a display, and so the URL is known when
+    // QML is built.
+    QString initialUrl;
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == QLatin1String("--page")) {
+            if (i + 1 < argc)
+                initialUrl = normaliseUrl(QString::fromLocal8Bit(argv[++i]));
+        } else if (arg.startsWith(QLatin1String("--page="))) {
+            initialUrl = normaliseUrl(arg.mid(7));
+        } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
+            printUsage(argv[0]);
+            return 0;
+        } else if (arg == QLatin1String("--version")) {
+            std::printf("NanoBrowser %s\n", NANOBROWSER_VERSION);
+            return 0;
+        }
+    }
+
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QCoreApplication::setApplicationName(QStringLiteral("NanoBrowser"));
 
@@ -431,13 +528,31 @@ int main(int argc, char *argv[])
         gpuMode = vulkanRenderer ? QStringLiteral("raster") : QStringLiteral("full");
 
     QByteArray extraFlags = "--enable-unsafe-swiftshader --ignore-gpu-blocklist "
-                            "--disable-features=WebGPU ";
+                            // Work that only costs time on a board with two
+                            // Cortex-A35 cores: translation, cast, background
+                            // network chatter and the component updater.
+                            "--disable-features=WebGPU,Translate,MediaRouter,OptimizationHints "
+                            "--disable-background-networking --disable-component-update "
+                            "--disable-sync --no-first-run --no-pings "
+                            "--disable-domain-reliability --disable-breakpad "
+                            // 100 MB of on-disk HTTP cache: the second visit to a
+                            // site then costs nothing but the HTML, which is what
+                            // makes the browser feel instant on a slow link.
+                            "--disk-cache-size=104857600 ";
     if (gpuMode == QLatin1String("full"))
         extraFlags += "--enable-gpu-rasterization --enable-zero-copy";
     else if (gpuMode == QLatin1String("raster"))
         extraFlags += "--enable-gpu-rasterization --disable-gpu-compositing";
     else
         extraFlags += "--disable-gpu";
+
+    // Chromium switches to try out without a rebuild, e.g.
+    //   NANOBROWSER_EXTRA_FLAGS="--enable-low-end-device-mode"
+    // They are appended, so they win over the defaults above.
+    const QByteArray experimentFlags = qgetenv("NANOBROWSER_EXTRA_FLAGS").trimmed();
+    if (!experimentFlags.isEmpty())
+        extraFlags += QByteArrayLiteral(" ") + experimentFlags;
+
     const QByteArray baseFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
     if (!baseFlags.contains(extraFlags))
         qputenv("QTWEBENGINE_CHROMIUM_FLAGS", baseFlags.isEmpty()
@@ -451,11 +566,10 @@ int main(int argc, char *argv[])
     QtWebEngineQuick::initialize();
 #endif
 
-    QWebEngineProfile *profile = new QWebEngineProfile(QStringLiteral("nanobrowser"), &app);
-    profile->setPersistentStoragePath(
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-        + QStringLiteral("/QtWebEngine/nanobrowser"));
-    profile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
+    // The profile lives in qml/Main.qml (storageName "nanobrowser"), so nothing
+    // is opened here: a second, unused profile pointed at the same directory
+    // would only fight over the same files.
+    Session session;
 
     QQmlApplicationEngine engine;
     // Target Qt: no QQmlEngine::addContextProperty(); context properties go
@@ -464,11 +578,24 @@ int main(int argc, char *argv[])
     if (context) {
         context->setContextProperty("graphicsApi", g_graphicsApi);
         context->setContextProperty("graphicsReason", g_graphicsReason);
+        context->setContextProperty("graphicsFallback", g_graphicsFallback);
+        context->setContextProperty("initialUrl", initialUrl);
+        context->setContextProperty("processStartMs", g_processStartMs);
+        context->setContextProperty("session", &session);
+        context->setContextProperty("timingEnabled",
+                                    !qgetenv("NANOBROWSER_TIMING").isEmpty());
+        context->setContextProperty("exitAfterSeconds",
+                                    QString::fromLocal8Bit(qgetenv("NANOBROWSER_EXIT_AFTER")).toInt());
     }
 
     engine.loadFromModule("NanoBrowser", "Main");
 
-    return app.exec();
+    const int exitCode = app.exec();
+
+    // Normally QML leaves through Session::closeNow() (see above); this is the
+    // way out when the event loop ends some other way, e.g. no QML at all.
+    std::fflush(nullptr);
+    std::_Exit(exitCode);
 }
 
 // Q_OBJECT lives in this .cpp, so the generated meta-object has to be included

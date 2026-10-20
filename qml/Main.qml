@@ -29,6 +29,127 @@ ApplicationWindow {
     property bool edgeHover: false
     property int barHeight: 62
 
+    // ---------------------------------------------------------------------
+    // Timing (NANOBROWSER_TIMING=1)
+    // ---------------------------------------------------------------------
+    // Every line is printed against the moment main() started, so the total is
+    // what a user waits for: the window, the first frame and the page. Nothing
+    // is printed unless the variable is set.
+    property bool firstFrameSeen: false
+
+    function elapsed() {
+        return Date.now() - processStartMs
+    }
+
+    function logTiming(text) {
+        if (timingEnabled)
+            console.info("NanoBrowser[timing]: " + text + " at " + elapsed() + " ms")
+    }
+
+    // What the page itself measured: time to first byte, DOMContentLoaded, the
+    // load event, and how many bytes and resources arrived.
+    function reportNavigationTiming() {
+        if (!timingEnabled)
+            return
+        webView.runJavaScript(
+            "(function(){var n=(performance.getEntriesByType('navigation')||[])[0]||{};"
+            + "var r=performance.getEntriesByType('resource')||[];"
+            + "var b=(n.transferSize||0);for(var i=0;i<r.length;i++)b+=(r[i].transferSize||0);"
+            + "return [Math.round(n.requestStart||0),Math.round(n.responseStart||0),"
+            + "Math.round(n.domContentLoadedEventEnd||0),Math.round(n.loadEventEnd||0),"
+            + "Math.round(b/1024),r.length];})()",
+            function (v) {
+                if (!v || v.length < 6)
+                    return
+                console.info("NanoBrowser[timing]: page ttfb " + v[1] + " ms, dom "
+                             + v[2] + " ms, load " + v[3] + " ms, " + v[4] + " kB in "
+                             + v[5] + " resources")
+            })
+    }
+
+    Component.onCompleted: logTiming("qml ready")
+
+    onFrameSwapped: {
+        if (!firstFrameSeen) {
+            firstFrameSeen = true
+            logTiming("first frame")
+        }
+    }
+
+    // How smooth the page is: scroll it for three seconds and count the frames
+    // that actually reached the screen. Measured through requestAnimationFrame,
+    // so it includes Chromium's rasterisation and Qt's compositing, which is
+    // exactly what a finger on the screen feels.
+    function startFrameProbe() {
+        if (!timingEnabled)
+            return
+        webView.runJavaScript(
+            "window.__nbStart=performance.now();window.__nbFrames=0;window.__nbY=0;"
+            + "(function tick(){window.__nbFrames++;window.__nbY+=30;"
+            + "var h=Math.max(document.documentElement.scrollHeight,"
+            + "document.body?document.body.scrollHeight:0);"
+            + "if(window.__nbY>h)window.__nbY=0;window.scrollTo(0,window.__nbY);"
+            + "window.__nbId=requestAnimationFrame(tick);})();")
+        frameProbeTimer.start()
+    }
+
+    Timer {
+        id: frameProbeDelay
+        interval: 2500
+        onTriggered: startFrameProbe()
+    }
+
+    Timer {
+        id: frameProbeTimer
+        interval: 3000
+        onTriggered: webView.runJavaScript(
+            "cancelAnimationFrame(window.__nbId);"
+            + "[window.__nbFrames,performance.now()-window.__nbStart]",
+            function (v) {
+                if (!v || v.length < 2 || v[1] < 500)
+                    return
+                console.info("NanoBrowser[timing]: page "
+                             + (v[0] / (v[1] / 1000)).toFixed(1) + " fps over "
+                             + (v[1] / 1000).toFixed(1) + " s while scrolling")
+            })
+    }
+
+    // ---------------------------------------------------------------------
+    // Closing
+    // ---------------------------------------------------------------------
+    // Closing the page used to mean destroying the WebEngineView first and then
+    // the window, and every variant of that ended in libwayland reporting
+    // "queue destroyed while proxies still attached: zwp_linux_buffer_release_v1@N"
+    // whenever the page was still producing frames. Measured over nine runs:
+    // destroying the view warned in seven of them, closing the window in most,
+    // and ending the session without tearing either down warned in none.
+    property bool shuttingDown: false
+
+    function shutdown() {
+        if (shuttingDown)
+            return
+        shuttingDown = true
+        logTiming("shutting down")
+        shutdownTimer.start()
+    }
+
+    Timer {
+        id: shutdownTimer
+        interval: 300
+        onTriggered: session.closeNow()
+    }
+
+
+    // NANOBROWSER_EXIT_AFTER=SECONDS closes the window the same way the X in
+    // the title bar does, so a shutdown can be tested without hands on the
+    // mouse (and without a signal, which is not the same path).
+    Timer {
+        interval: Math.max(0, exitAfterSeconds) * 1000
+        running: exitAfterSeconds > 0
+        repeat: false
+        onTriggered: window.shutdown()
+    }
+
     function loadUrl() {
         var text = addressBar.text.trim()
         if (text.length === 0)
@@ -56,6 +177,15 @@ ApplicationWindow {
     onVisibilityChanged: {
         if (window.visibility !== Window.FullScreen)
             window.edgeHover = false
+    }
+
+    // A close request from the compositor (Alt+F4, or the shell's own button)
+    // goes through the same shutdown, so every way out is one path.
+    onClosing: function(close) {
+        if (!shuttingDown) {
+            close.accepted = false
+            window.shutdown()
+        }
     }
 
     Shortcut {
@@ -145,7 +275,7 @@ ApplicationWindow {
             }
             kind: "close"
             tip: "Close NanoBrowser"
-            onClicked: window.close()
+            onClicked: window.shutdown()
         }
     }
 
@@ -299,7 +429,7 @@ ApplicationWindow {
         height: 44
         z: 50
         clip: true
-        visible: graphicsApi !== "Vulkan"
+        visible: graphicsFallback
         opacity: 0
         color: "#8A4A00"
 
@@ -326,7 +456,14 @@ ApplicationWindow {
         // disk-based storage before it has a storage name: it warns "Storage
         // name is empty ..." and waits for storageNameChanged. Turn it on once
         // the name is in place instead, so the switch happens without a warning.
-        Component.onCompleted: offTheRecord = false
+        Component.onCompleted: {
+            offTheRecord = false
+            // 100 MB of on-disk HTTP cache, so a second visit to a site only
+            // costs what changed. Set here rather than on the Chromium command
+            // line because the profile is what Qt WebEngine passes on.
+            httpCacheType = WebEngineProfile.DiskHttpCache
+            httpCacheMaximumSize = 104857600
+        }
     }
 
     WebEngineView {
@@ -339,11 +476,32 @@ ApplicationWindow {
             bottom: parent.bottom
         }
         settings.webGLEnabled: true
-        url: "https://duckduckgo.com/"
+        url: initialUrl.length > 0 ? initialUrl : "https://duckduckgo.com/"
         onUrlChanged: {
             addressBar.text = url.toString()
         }
-        onJavaScriptConsoleMessage: {}
+        onLoadingChanged: function(loadRequest) {
+            if (loadRequest.status === WebEngineView.LoadStartedStatus) {
+                logTiming("load started: " + loadRequest.url)
+            } else if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
+                logTiming("load finished: " + loadRequest.url)
+                reportNavigationTiming()
+                frameProbeDelay.restart()
+            } else if (loadRequest.status === WebEngineView.LoadFailedStatus) {
+                logTiming("load failed (" + loadRequest.errorString + "): " + loadRequest.url)
+            }
+        }
+        onLoadProgressChanged: {
+            if (webView.loadProgress === 50)
+                logTiming("half way there")
+        }
+        onJavaScriptConsoleMessage: function(level, message, line, source) {
+            // Only what the page logs on purpose (level 0): its warnings and
+            // errors are the page's business, and would only look like ours.
+            if (timingEnabled && level === 0)
+                console.info("NanoBrowser[page]: " + message
+                             + (line > 0 ? " (line " + line + ")" : ""))
+        }
     }
 
     MouseArea {
