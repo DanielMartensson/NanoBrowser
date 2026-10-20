@@ -11,6 +11,15 @@ ApplicationWindow {
     visible: true
     title: webView.title.length > 0 ? "NanoBrowser - " + webView.title : "NanoBrowser"
 
+    // Frameless, because the window draws its own title bar and resize edges
+    // (see below). Without this, a compositor that decorates toplevels by
+    // default - Weston's desktop shell does - wraps the window in a second
+    // frame: two sets of minimize/maximize/close buttons, and a border that
+    // takes away the few pixels the window's own resize handles sit on. Qt asks
+    // for client-side decorations when the flag is set (xdg-decoration
+    // client_side), so the compositor leaves the window alone.
+    flags: Qt.FramelessWindowHint
+
     palette {
         window: "#0F1117"
         windowText: "#E8EAF2"
@@ -193,11 +202,13 @@ ApplicationWindow {
         onActivated: window.toggleFullscreen()
     }
 
-    // Weston's desktop shell on this image has no xdg-decoration support, and Qt 6
-    // cannot ask for server-side decorations either, so the window draws its own
-    // slim title bar. Without it the window could not be moved, minimized or
-    // closed at all: dragging the bar asks the compositor for an interactive move
-    // (xdg_toplevel.move), which is what CSD clients do everywhere.
+    // The window is frameless (see the flags at the top), so the compositor
+    // draws no frame and this is the only chrome there is: the title bar moves
+    // the window, the buttons minimize/maximize/close it, and the strips along
+    // the edges resize it. Without the frame the window could not be moved,
+    // minimized or closed at all: dragging the bar asks the compositor for an
+    // interactive move (xdg_toplevel.move), which is what CSD clients do
+    // everywhere.
     //
     // Minimize is xdg_toplevel.set_minimized, which Weston's desktop shell
     // implements by moving the view into its minimized layer - a hidden window,
@@ -517,7 +528,8 @@ ApplicationWindow {
 
     // There is no compositor-side frame either, so the window also resizes
     // itself: pressing an edge asks for an interactive resize
-    // (xdg_toplevel.resize).
+    // (xdg_toplevel.resize). The strips sit on the outermost pixels of the
+    // window now that nothing is drawn around it.
     MouseArea {
         anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
         width: 6
